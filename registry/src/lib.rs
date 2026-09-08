@@ -1,5 +1,10 @@
 use std::{
-    collections::HashMap, fmt::Display, hash::Hash, marker::PhantomData, ops::Deref, sync::RwLock,
+    collections::HashMap,
+    fmt::{Debug, Display},
+    hash::Hash,
+    marker::PhantomData,
+    ops::Deref,
+    sync::RwLock,
 };
 
 /// A registry that stores items and returns cheap `Id`s to reference them with.
@@ -68,7 +73,7 @@ impl<K: Hash + Clone + Eq> Registry<K> {
 ///
 /// Since `Registry`s can (and should) only exist in a `static` context, attempting to use an `Id` after
 /// forcibly destroying its parent `Registry` (via `Box::from_raw`) will result in UB.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq)]
 pub struct Id<K: Hash + Clone + Eq> {
     index: usize,
     pointer: *const Registry<K>,
@@ -105,6 +110,16 @@ impl<K: Hash + Clone + Eq> Id<K> {
     pub fn lookup(&self) -> &K {
         let store: &Registry<K> = unsafe { &*self.pointer };
         store.lookup(*self)
+    }
+}
+
+impl<K: Hash + Clone + Eq + Debug> Debug for Id<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Id")
+            .field("index", &self.index)
+            .field("pointer", &self.pointer)
+            .field("inner", &self.lookup())
+            .finish()
     }
 }
 

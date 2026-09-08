@@ -1,4 +1,4 @@
-fn main() -> i32 {
+fn main(): i32 {
   let x = 5;
   let y = &x;
   let z = &y;

@@ -1,4 +1,4 @@
-fn main(x: i32) -> i32 {
+fn main(x: i32) : i32 {
   let y = &x;
   return *y + x;
 }

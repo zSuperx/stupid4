@@ -1,107 +1,34 @@
 use crate::IRs::{hir::*, tir::*};
 use crate::ast::*;
 use crate::common::*;
-use crate::state::*;
-use crate::state::{Function, SymbolInfo, SymbolKind, add_type, global_state, next_symbol};
+use crate::translation_unit::{SymbolInfo, SymbolKind, TranslationUnit, add_type, next_symbol};
 
-impl Function {
-    fn add_local_symbol(
-        &mut self,
-        name: Spanned<&'static str>,
-        ty: TypeId,
-        kind: SymbolKind,
-    ) -> Symbol {
-        let symbol = next_symbol(name.inner);
-        self.env.insert(name.inner, symbol);
-        self.symbol_table.insert(
+impl TranslationUnit {
+    pub fn check_func(&mut self, hf: HirFunction) -> TirFunction {
+        let return_type = self.resolve_type(&hf.returns);
+        let symbol = next_symbol(hf.name.inner);
+
+        self.reset_function_state(symbol, return_type);
+
+        for (i, (raw_arg, raw_ty)) in hf.args.into_iter().enumerate() {
+            let ty = self.resolve_type(&raw_ty);
+            self.add_local_symbol(raw_arg, ty, SymbolKind::Arg(i));
+        }
+
+        let body = self.check_stmt(hf.body);
+        TirFunction {
+            name: hf.name,
             symbol,
-            SymbolInfo {
-                symbol,
-                raw_name: name,
-                ty,
-                kind,
-                address_taken: Default::default(),
-                value: Default::default(),
-            },
-        );
-        symbol
-    }
-
-    pub fn lookup_symbol(&mut self, symbol: Symbol) -> &SymbolInfo {
-        match self.symbol_table.get(&symbol) {
-            Some(i) => i,
-            None => global_state().symbol_table.get(&symbol).unwrap_or_else(|| {
-                die!("Symbol not found: {symbol}");
-            }),
-        }
-    }
-
-    pub fn lookup_symbol_mut(&mut self, symbol: Symbol) -> &mut SymbolInfo {
-        match self.symbol_table.get_mut(&symbol) {
-            Some(i) => i,
-            None => global_state().symbol_table.get_mut(&symbol).unwrap(),
-        }
-    }
-
-    pub fn new(
-        ParsedFunction {
-            name,
-            returns,
-            args,
+            symbol_table: std::mem::take(&mut self.current_function.symbol_table),
+            return_type,
             body,
-        }: ParsedFunction,
-    ) -> Self {
-        let mut env = Env::default();
-        env.push_filled_scope(global_state().globals.clone());
-
-        let mut function = Self {
-            name,
-            env,
-            symbol: global_state().globals[name.inner],
-            return_type: resolve_type(&returns),
-            loop_labels: Default::default(),
-            loop_depth: 0,
-            symbol_table: Default::default(),
-            body: None,
-        };
-
-        // Type check the function header
-        function.env.push_scope();
-        let mut checked_args = vec![];
-        for (i, (argname, ty)) in args.into_iter().enumerate() {
-            let var_ty = resolve_type(&ty);
-            if *var_ty == Type::Void {
-                die!("Function argument cannot have type {var_ty}");
-            }
-
-            let argsym = next_symbol(argname.inner);
-            function.env.insert(argname.inner, argsym);
-            function.symbol_table.insert(
-                argsym,
-                SymbolInfo {
-                    symbol: argsym,
-                    raw_name: argname,
-                    ty: var_ty,
-                    kind: SymbolKind::Arg(i),
-                    address_taken: false,
-                    value: None,
-                },
-            );
-
-            checked_args.push((argsym, var_ty));
         }
-
-        // Type check the function body
-        let body = function.check_stmt(*body);
-        function.env.pop_scope();
-        function.body = Some(body);
-        function
     }
 
     fn check_stmt(&mut self, Spanned { inner: stmt, span }: Spanned<HirStmt>) -> TirStmt {
         match stmt {
             HirStmt::Let { lhs, ty, rhs } => {
-                let ty = ty.map(|t| resolve_type(&t));
+                let ty = ty.map(|t| self.resolve_type(&t));
                 let checked_rhs = self.check_rvalue_expr(&rhs, ty);
 
                 if let Some(ty) = ty
@@ -115,10 +42,10 @@ impl Function {
                 let var_ty = checked_rhs.ty;
 
                 let lhs_symbol = self.add_local_symbol(lhs, var_ty, SymbolKind::Local);
+                println!("Adding local symbol: {} -> {lhs_symbol}", lhs.inner);
 
                 TirStmt::Let {
                     lhs: lhs_symbol,
-                    ty,
                     rhs: checked_rhs,
                 }
             }
@@ -132,25 +59,25 @@ impl Function {
                         span.wrap(cond_ty)
                     )
                 }
-                self.env.push_scope();
-                self.loop_depth += 1;
+                self.current_function.env.push_scope();
+                self.current_function.loop_depth += 1;
                 let checked_body = self.check_stmt(*body);
-                self.loop_depth -= 1;
-                self.env.push_scope();
+                self.current_function.loop_depth -= 1;
+                self.current_function.env.pop_scope();
                 TirStmt::While {
                     cond: checked_cond,
                     body: Box::new(checked_body),
                 }
             }
             HirStmt::Continue => {
-                if self.loop_depth > 0 {
+                if self.current_function.loop_depth > 0 {
                     TirStmt::Continue
                 } else {
                     die!("Continue statements can only be used inside a loop body: {span}");
                 }
             }
             HirStmt::Break => {
-                if self.loop_depth > 0 {
+                if self.current_function.loop_depth > 0 {
                     TirStmt::Break
                 } else {
                     die!("Break statements can only be used inside a loop body: {span}");
@@ -174,14 +101,14 @@ impl Function {
                 }
             }
             HirStmt::Return(val) => {
-                let returns = self.return_type;
+                let returns = self.current_function.return_type.unwrap();
 
                 let checked_val = self.check_rvalue_expr(&val, Some(returns));
                 if checked_val.ty != returns {
                     die!(
                         "Mismatched return type. Function expects {returns} but got {}: {}",
                         checked_val.ty,
-                        span.wrap(self.name.inner)
+                        self.current_function_name()
                     )
                 }
 
@@ -192,9 +119,9 @@ impl Function {
                 }
             }
             HirStmt::Block(s) => {
-                self.env.push_scope();
+                self.current_function.env.push_scope();
                 let stmt = TirStmt::Block(s.into_iter().map(|st| self.check_stmt(st)).collect());
-                self.env.pop_scope();
+                self.current_function.env.pop_scope();
                 stmt
             }
             HirStmt::Expr(e) => {
@@ -213,7 +140,7 @@ impl Function {
         match expr {
             // x = ...
             HirExpr::Ident(symbol) => {
-                let Some(symbol) = self.env.get(symbol) else {
+                let Some(symbol) = self.current_function.env.get(symbol) else {
                     die!("Undefined variable: {}", span.wrap(symbol));
                 };
                 let SymbolInfo { ty, .. } = self.lookup_symbol(symbol);
@@ -332,14 +259,14 @@ impl Function {
                 TirExpr::new(kind, ty)
             }
             HirExpr::Ident(symbol) => {
-                let Some(symbol) = self.env.get(symbol) else {
+                let Some(symbol) = self.current_function.env.get(symbol) else {
                     die!("Undefined variable: {}", span.wrap(symbol));
                 };
                 let SymbolInfo { ty, .. } = self.lookup_symbol(symbol);
                 let kind = TirExprKind::ValueOf(symbol);
                 TirExpr::new(kind, *ty)
             }
-            HirExpr::Index { base, index } => {
+            HirExpr::Index { .. } => {
                 // This is an rvalue, so it should always be a Load
                 let inner = self.check_lvalue_expr(&span.wrap(expr.clone()), hint);
                 let ty = inner.ty.get_pointee();
@@ -364,7 +291,7 @@ impl Function {
             HirExpr::Field { base, field } => {
                 let mut base = self.check_rvalue_expr(base, None);
                 let s = base.ty.lookup();
-                let Type::Base { name, fields } = s else {
+                let Type::Base { fields, .. } = s else {
                     die!("Type {s} is not a struct type. {span}");
                 };
                 let mut offset = 0;
@@ -410,7 +337,7 @@ impl Function {
                 // Casting should be valid between:
                 // - Same sized types (this means all pointers can be cast to and from each other)
                 // - Any primitive with any other primitive
-                let checked_ty = resolve_type(target_ty);
+                let checked_ty = self.resolve_type(target_ty);
                 let checked_rhs = Box::new(self.check_rvalue_expr(rhs, Some(checked_ty)));
                 let kind = TirExprKind::Cast {
                     target_ty: checked_ty,
@@ -511,7 +438,7 @@ impl Function {
                 TirExpr::new(kind, ty)
             }
             HirExpr::SizeOfTy { ty } => {
-                let ty_size = resolve_type(ty).bytes();
+                let ty_size = self.resolve_type(ty).bytes();
                 let kind = TirExprKind::Num(ty_size as i128);
                 let ty = add_type(Type::U64);
                 TirExpr::new(kind, ty)
@@ -523,29 +450,6 @@ impl Function {
                 TirExpr::new(kind, ty)
             }
         }
-    }
-
-    fn scale_ptr_int_math(&mut self, ptr: TirExpr, op: BinOp, int: TirExpr) -> TirExpr {
-        let ptr_ty = ptr.ty;
-        let scaled_int = {
-            let scale = {
-                let pointee_size = ptr.ty.get_pointee().bytes();
-                let kind = TirExprKind::Num(pointee_size as i128);
-                TirExpr::new(kind, add_type(Type::U64))
-            };
-            let kind = TirExprKind::Bin {
-                op: BinOp::Mul,
-                lhs: Box::new(int),
-                rhs: Box::new(scale),
-            };
-            TirExpr::new(kind, add_type(Type::U64))
-        };
-        let kind = TirExprKind::Bin {
-            op,
-            lhs: Box::new(ptr),
-            rhs: Box::new(scaled_int),
-        };
-        TirExpr::new(kind, ptr_ty)
     }
 }
 

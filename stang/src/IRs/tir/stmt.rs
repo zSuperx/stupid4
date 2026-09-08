@@ -1,4 +1,3 @@
-use crate::ast::*;
 use crate::common::*;
 
 use super::*;
@@ -7,7 +6,6 @@ use super::*;
 pub enum TirStmt {
     Let {
         lhs: Symbol,
-        ty: Option<TypeId>,
         rhs: TirExpr,
     },
     While {
@@ -25,3 +23,5 @@ pub enum TirStmt {
     Block(Vec<TirStmt>),
     Expr(TirExpr),
 }
+
+

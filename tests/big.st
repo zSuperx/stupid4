@@ -1,4 +1,4 @@
-fn main() -> i32 {
+fn main() : i32 {
   let input: i32 = 8;
   let fallback: i32 = 20;
   let base: i32 = 5;

@@ -3,6 +3,6 @@ struct Point {
   y: i32;
 }
 
-fn get_x(p: Point) -> i32 {
+fn get_x(p: Point) : i32 {
   return p.x;
 }

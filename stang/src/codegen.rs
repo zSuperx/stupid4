@@ -1,35 +1,66 @@
 use crate::IRs::tir::*;
 use crate::ast::{BinOp, Type};
 use crate::die;
-use crate::state::{Function, LoopLabelPair, SymbolKind, add_type};
+use crate::translation_unit::{LoopLabels, SymbolKind, TranslationUnit, add_type};
 
 use IRInstr::*;
 use shrimple::comment;
 use shrimple::stir::builder::*;
 use shrimple::stir::isa::*;
 
-impl Function {
+impl TranslationUnit {
+    pub fn codegen_func(&mut self, mut tf: TirFunction) -> IRFunction {
+        let irrty = match tf.return_type.lookup() {
+            Type::Void => IRType::I32,
+            x => x.toIRType(),
+        };
+        let mut builder = IRFunction::new(tf.name.inner, irrty);
+
+        // Create register bindings for each symbol in this function (including arguments)
+        self.codegen_locals(&mut builder, &mut tf);
+
+        self.codegen_stmt(&mut builder, &tf.body);
+
+        // If the function returns Void type, then the default return to be inserted should be a
+        // IRInstr::Retv
+        let default_return_instr = if *tf.return_type.lookup() == Type::Void {
+            Some(Retv)
+        } else {
+            None
+        };
+
+        if !builder.verify(default_return_instr) {
+            die!(
+                "Function doesn't return a value on some paths, but is expected to return {}: {}",
+                tf.return_type,
+                tf.name
+            );
+        }
+
+        builder
+    }
+
     /// Binds all local variables and function arguments to virtual registers.
     /// Arguments are resolved first, in order, followed by locals
     ///
     /// The order of local variables is done alphabetically so as to avoid
     /// randomness in the compiled output
-    pub fn codegen_locals(&mut self, builder: &mut IRFunction) {
+    fn codegen_locals(&mut self, builder: &mut IRFunction, tf: &mut TirFunction) {
         let mut args = vec![];
         let mut locals = vec![];
 
-        for (symbol, info) in self.symbol_table.iter() {
+        for (symbol, info) in tf.symbol_table.iter() {
             match info.kind {
                 SymbolKind::Local => locals.push(*symbol),
                 SymbolKind::Arg(_) => args.push(*symbol),
-                SymbolKind::Global => todo!(),
-                SymbolKind::Function => todo!(),
+                SymbolKind::Global => {}
+                SymbolKind::Function => {}
             }
         }
 
         // Sort argument symbols by their index
         args.sort_by_key(|s| {
-            let info = self.symbol_table.get(s).unwrap();
+            let info = tf.symbol_table.get(s).unwrap();
             let SymbolKind::Arg(i) = info.kind else {
                 unreachable!()
             };
@@ -38,9 +69,9 @@ impl Function {
 
         // Primitive args are alloca'd and filled normally, while structs are implicitly passed as pointers
         for symbol in args {
-            let info = self.symbol_table.get_mut(&symbol).unwrap();
+            let info = tf.symbol_table.get_mut(&symbol).unwrap();
             let val = match info.ty.lookup() {
-                Type::Base { name, fields } => {
+                Type::Base { .. } => {
                     let arg = IRValue::Ptr(builder.nextReg());
                     builder.addArg(arg, IRType::Ptr);
                     arg
@@ -61,16 +92,13 @@ impl Function {
         }
 
         // Sort locals by their local variable name
-        locals.sort_by_key(|s| {
-            let info = self.symbol_table.get(s).unwrap();
-            info.raw_name.inner
-        });
+        locals.sort_by_key(|s| tf.symbol_table[s].raw_name.inner);
 
         // Local variables are alloca'd but not initialized to anything
         for symbol in locals {
-            let info = self.symbol_table.get_mut(&symbol).unwrap();
+            let info = tf.symbol_table.get_mut(&symbol).unwrap();
             let val = match info.ty.lookup() {
-                Type::Base { name, fields } => {
+                Type::Base { .. } => {
                     todo!("Figure out how to alloca aggregate types")
                 }
                 ty => {
@@ -85,42 +113,11 @@ impl Function {
         }
     }
 
-    pub fn codegen_func(&mut self) -> IRFunction {
-        let irrty = match self.return_type.lookup() {
-            Type::Void => IRType::I32,
-            x => x.toIRType(),
-        };
-        let mut builder = IRFunction::new(self.name.inner, irrty);
-
-        // Create register bindings for each symbol in this function (including arguments)
-        self.codegen_locals(&mut builder);
-
-        let body = self.body.clone().unwrap();
-        self.codegen_stmt(&mut builder, &body);
-
-        // If the function returns Void type, then the default return to be inserted should be a
-        // IRInstr::Retv
-        let default_return_instr = if *self.return_type.lookup() == Type::Void {
-            Some(Retv)
-        } else {
-            None
-        };
-
-        if !builder.verify((*self.return_type == Type::Void).then_some(Retv)) {
-            die!(
-                "Function doesn't return a value on some paths, but is expected to return {}: {}",
-                self.return_type,
-                self.name
-            );
-        }
-
-        builder
-    }
-
     fn codegen_stmt(&mut self, builder: &mut IRFunction, stmt: &TirStmt) {
         match stmt {
-            TirStmt::Let { lhs, ty, rhs } => {
+            TirStmt::Let { lhs, rhs, .. } => {
                 let rhs_val = self.codegen_expr(builder, rhs);
+                println!("Looking up {lhs}");
                 let info = self.lookup_symbol(*lhs);
                 let dst = info.value.expect("Symbol doesn't have value");
                 let ty = info.ty;
@@ -143,13 +140,13 @@ impl Function {
                 builder.addSuccessors(&[body_block, end_block]);
 
                 // Codegen the body stmt
-                self.loop_labels.push(LoopLabelPair {
+                self.current_function.loop_labels.push(LoopLabels {
                     cond_block,
                     end_block,
                 });
                 builder.setInsertPoint(body_block);
                 self.codegen_stmt(builder, body);
-                self.loop_labels.pop();
+                self.current_function.loop_labels.pop();
 
                 // Body always jumps to cond
                 builder.emit(Jmp(cond_block));
@@ -159,24 +156,20 @@ impl Function {
                 builder.setInsertPoint(end_block);
             }
             TirStmt::Continue => {
-                let Some(LoopLabelPair {
-                    cond_block,
-                    end_block,
-                }) = self.loop_labels.last()
+                let Some(LoopLabels { cond_block, .. }) =
+                    self.current_function.loop_labels.last().copied()
                 else {
                     die!("Continue statements can only be called within loops.");
                 };
-                builder.emit(Jmp(*cond_block));
+                builder.emit(Jmp(cond_block));
             }
             TirStmt::Break => {
-                let Some(LoopLabelPair {
-                    cond_block,
-                    end_block,
-                }) = self.loop_labels.last()
+                let Some(LoopLabels { end_block, .. }) =
+                    self.current_function.loop_labels.last().copied()
                 else {
                     die!("Continue statements can only be called within loops.");
                 };
-                builder.emit(Jmp(*end_block));
+                builder.emit(Jmp(end_block));
             }
             TirStmt::If { cond, then_, else_ } => {
                 let then_block = builder.newNamedBlock("then");

@@ -6,6 +6,6 @@ fn test_args(
   a5: i32, 
   a6: i32, 
   a7: i32, 
-) -> i32 {
+) : i32 {
   return a6 + a7;
 }

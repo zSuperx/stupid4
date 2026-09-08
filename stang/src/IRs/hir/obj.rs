@@ -1,9 +1,10 @@
 use super::*;
 use crate::ast::*;
+use crate::common::Spanned;
 
 #[derive(Debug, Clone)]
 pub enum HirObj {
-    Fn(ParsedFunction),
+    Fn(HirFunction),
     Global {
         name: Spanned<&'static str>,
         ty: Spanned<TypeId>,
@@ -16,9 +17,9 @@ pub enum HirObj {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedFunction {
+pub struct HirFunction {
     pub name: Spanned<&'static str>,
     pub returns: Spanned<TypeId>,
     pub args: Vec<(Spanned<&'static str>, Spanned<TypeId>)>,
-    pub body: Box<Spanned<HirStmt>>,
+    pub body: Spanned<HirStmt>,
 }

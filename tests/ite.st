@@ -1,4 +1,4 @@
-fn main() -> i32 {
+fn main(): i32 {
   let x: i32 = 5;
   let y = 232;
   if x > 2 {

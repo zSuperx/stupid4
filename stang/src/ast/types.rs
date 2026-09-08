@@ -112,7 +112,7 @@ impl Type {
             Type::I32 | Type::U32 => IRType::I32,
             Type::I64 | Type::U64 => IRType::I64,
             Type::Bool => IRType::I8,
-            Type::Pointer(id) => IRType::Ptr,
+            Type::Pointer(..) => IRType::Ptr,
             Type::Base { .. } => IRType::Ptr,
             Type::Function { .. } => todo!(),
             _ => panic!("Can't lower {self:?} type"),

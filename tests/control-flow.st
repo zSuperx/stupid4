@@ -1,4 +1,4 @@
-fn main() -> i32 {
+fn main(): i32 {
   if true {
     return 8;
   }

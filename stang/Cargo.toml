@@ -11,3 +11,4 @@ derived-deref = "2.1.0"
 heuristic-graph-coloring = { path = "../heuristic-graph-coloring/" }
 registry = { path = "../registry/" }
 tempfile = "3.27.0"
+anyhow = "1.0.104"

@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::common::Spanned;
 
 #[derive(Debug, Clone)]
 pub enum HirExpr {

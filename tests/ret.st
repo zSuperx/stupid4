@@ -1,4 +1,4 @@
-fn main() -> u8 {
-  let x = 8;
-  return @(u8)x;
+fn main(): u8 {
+  let x: u8 = 8;
+  return x;
 }
