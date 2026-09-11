@@ -19,7 +19,7 @@ pub enum HirObj {
 #[derive(Debug, Clone)]
 pub struct HirFunction {
     pub name: Spanned<&'static str>,
-    pub returns: Spanned<TypeId>,
+    pub return_type: Spanned<TypeId>,
     pub args: Vec<(Spanned<&'static str>, Spanned<TypeId>)>,
     pub body: Spanned<HirStmt>,
 }

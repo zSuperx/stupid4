@@ -9,7 +9,7 @@
 
 
 // Common imports needed by all ISAs:
-use crate::common::traits::InstructionTrait;
+use crate::common::InstructionTrait;
 use smallvec::{SmallVec, smallvec};
 use IRInstr::*;
 
@@ -24,9 +24,9 @@ pub enum IRInstr {
     /// ty, dst
     Alloca(IRType, IRValue),
     /// val, truebb, falsebb
-    Br(IRValue, IRBB, IRBB),
-    /// ty, dst, name, args
-    Call(IRType, IRValue, &'static str, SmallVec<[IRValue; 4]>),
+    Br(IRValue, IRLabel, IRLabel),
+    /// ty, dst, callee, args
+    Call(IRType, IRValue, String, SmallVec<[IRValue; 4]>),
     /// s
     Comment(String),
     /// ty, dst, rs1
@@ -36,7 +36,7 @@ pub enum IRInstr {
     /// cmp, ty, dst, lhs, rhs
     Icmp(CmpOp, IRType, IRValue, IRValue, IRValue),
     /// to
-    Jmp(IRBB),
+    Jmp(IRLabel),
     /// ty, ptr, dst
     Load(IRType, IRValue, IRValue),
     /// ty, val
@@ -69,9 +69,9 @@ impl std::fmt::Display for IRInstr {
             Add(ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = add {ty}, {lhs}, {rhs}")),
             Alloca(ty, dst) => f.write_fmt(format_args!("{dst} = alloca {ty}")),
             Br(val, truebb, falsebb) => f.write_fmt(format_args!("br {val}, {truebb}, {falsebb}")),
-            Call(ty, dst, name, args) => {
+            Call(ty, dst, callee, args) => {
               let args_str = args.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
-              f.write_fmt(format_args!("{dst} = call({args_str})"))
+              f.write_fmt(format_args!("{dst} = {callee}({args_str})"))
           }
       ,
             Comment(s) => f.write_fmt(format_args!("; {s}")),
@@ -103,7 +103,7 @@ impl InstructionTrait for IRInstr {
             Add(ty, dst, lhs, rhs) => smallvec![lhs, rhs],
             Alloca(ty, dst) => smallvec![],
             Br(val, truebb, falsebb) => smallvec![val],
-            Call(ty, dst, name, args) => args.iter().collect(),
+            Call(ty, dst, callee, args) => args.iter().collect(),
             Comment(s) => smallvec![],
             Copy(ty, dst, rs1) => smallvec![rs1],
             Getaddr(dst, base, elem_ty, idx) => smallvec![base, idx],
@@ -129,7 +129,7 @@ impl InstructionTrait for IRInstr {
             Add(ty, dst, lhs, rhs) => smallvec![dst],
             Alloca(ty, dst) => smallvec![dst],
             Br(val, truebb, falsebb) => smallvec![],
-            Call(ty, dst, name, args) => smallvec![dst],
+            Call(ty, dst, callee, args) => smallvec![dst],
             Comment(s) => smallvec![],
             Copy(ty, dst, rs1) => smallvec![dst],
             Getaddr(dst, base, elem_ty, idx) => smallvec![dst],
@@ -155,7 +155,7 @@ impl InstructionTrait for IRInstr {
             Add(ty, dst, lhs, rhs) => false,
             Alloca(ty, dst) => false,
             Br(val, truebb, falsebb) => true,
-            Call(ty, dst, name, args) => false,
+            Call(ty, dst, callee, args) => false,
             Comment(s) => false,
             Copy(ty, dst, rs1) => false,
             Getaddr(dst, base, elem_ty, idx) => false,

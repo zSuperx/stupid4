@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use super::*;
 use crate::ast::*;
 use crate::common::*;
+use crate::translation_unit::LoopLabels;
 use crate::translation_unit::SymbolInfo;
+use crate::translation_unit::SymbolKind;
+use crate::translation_unit::global_state;
+use crate::translation_unit::next_symbol;
 
 #[derive(Debug, Clone)]
 pub enum TirObj {
@@ -25,19 +29,49 @@ pub enum TirObj {
 
 #[derive(Debug)]
 pub struct TirFunction {
-    /// The raw name of the function
     pub name: Spanned<&'static str>,
 
-    /// The symbol its mapped to
     pub symbol: Symbol,
-    
-    /// Local symbol table
-    pub symbol_table: HashMap<Symbol, SymbolInfo>,
 
-    /// The return type of this function.
     pub return_type: TypeId,
 
+    /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
+    /// most (current) scope, going up in scopes on failure
+    pub env: Env<&'static str, Symbol>,
 
-    /// The AST node of the function representing the body
-    pub body: TirStmt,
+    /// Used to codegen continue/break
+    pub loop_labels: Vec<LoopLabels>,
+
+    /// Use in sema to validate use of continue/break
+    pub loop_depth: usize,
+
+    pub symbol_table: HashMap<Symbol, SymbolInfo>,
+
+    pub symbol_counter: usize,
+
+    pub body: Option<TirStmt>,
+}
+
+impl TirFunction {
+    pub fn add_local_symbol(
+        &mut self,
+        name: Spanned<&'static str>,
+        ty: TypeId,
+        kind: SymbolKind,
+    ) -> Symbol {
+        let symbol = next_symbol(name.inner);
+        self.env.insert(name.inner, symbol);
+        self.symbol_table.insert(
+            symbol,
+            SymbolInfo {
+                symbol,
+                raw_name: name,
+                ty,
+                kind,
+                address_taken: Default::default(),
+                value: Default::default(),
+            },
+        );
+        symbol
+    }
 }

@@ -1,8 +1,5 @@
 use crate::{
-    common::{
-        basicblock::{BBID, BasicBlock},
-        builder::FunctionBuilder,
-    },
+    common::{BasicBlock, FunctionBuilder, Label},
     target::stir::builder::IRFunction,
     target::stir::isa::*,
     target::x86::isa::{LLType, Reg, x86Instr, x86Value},
@@ -36,7 +33,7 @@ impl x86Module {
     }
 }
 
-pub type x86BB = BBID<x86Instr>;
+pub type x86Label = Label<x86Instr>;
 pub type x86BasicBlock = BasicBlock<x86Instr>;
 pub type x86Function = FunctionBuilder<x86Instr, x86Value, LLType>;
 

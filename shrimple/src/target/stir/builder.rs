@@ -1,19 +1,13 @@
 use crate::{
-    common::{
-        basicblock::{BBID, BasicBlock},
-        builder::FunctionBuilder,
-    },
+    common::{BasicBlock, FunctionBuilder, ModuleBuilder, Label},
     stir::isa::{IRValue, VReg},
     target::stir::isa::{IRInstr, IRType},
 };
 
-pub struct IRModule {
-    function: Option<IRFunction>,
-}
-
-pub type IRBB = BBID<IRInstr>;
+pub type IRLabel = Label<IRInstr>;
 pub type IRBasicBlock = BasicBlock<IRInstr>;
 pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType>;
+pub type IRModule = ModuleBuilder<IRInstr, IRValue, IRType>;
 
 impl IRFunction {
     pub fn nextReg(&mut self) -> VReg {

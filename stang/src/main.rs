@@ -1,7 +1,7 @@
 #![allow(static_mut_refs)]
 #![allow(nonstandard_style)]
-// #![allow(unused)]
-#![warn(unused_imports)]
+#![allow(unused)]
+// #![warn(unused_imports)]
 #![warn(unused_qualifications)]
 #![warn(unused_allocation)]
 

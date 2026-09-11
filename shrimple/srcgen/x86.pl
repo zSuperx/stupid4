@@ -9,7 +9,7 @@ require "$Bin/utils/printers.pl";
 # Meta-constants: Rust types used in ISA definition
 my $VAL = "x86Value";
 my $INSTR = "x86Instr";
-my $BB = "x86BB";
+my $LABEL = "x86Label";
 
 # templates
 my $accumOp = {
@@ -21,7 +21,7 @@ my $accumOp = {
 };
 
 my $jcc = {
-  args => [ "to:$BB" ],
+  args => [ "to:$LABEL" ],
   fmt => "{name} {to}",
   term => 1,
 };

@@ -17,7 +17,7 @@ impl LLType {
             IRType::I16 => LLType::I16,
             IRType::I32 => LLType::I32,
             IRType::Ptr | IRType::I64 => LLType::I64,
-            IRType::Struct(..) => todo!(),
+            IRType::Struct => todo!(),
         }
     }
 

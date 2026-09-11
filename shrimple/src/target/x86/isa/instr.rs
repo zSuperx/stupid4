@@ -9,7 +9,7 @@
 
 
 // Common imports needed by all ISAs:
-use crate::common::traits::InstructionTrait;
+use crate::common::InstructionTrait;
 use smallvec::{SmallVec, smallvec};
 use x86Instr::*;
 
@@ -42,27 +42,27 @@ pub enum x86Instr {
     /// rs1, rs2
     Imul(x86Value, x86Value),
     /// to
-    Je(x86BB),
+    Je(x86Label),
     /// to
-    Jg(x86BB),
+    Jg(x86Label),
     /// to
-    Jge(x86BB),
+    Jge(x86Label),
     /// to
-    Jl(x86BB),
+    Jl(x86Label),
     /// to
-    Jle(x86BB),
+    Jle(x86Label),
     /// to
-    Jmp(x86BB),
+    Jmp(x86Label),
     /// to
-    Jne(x86BB),
+    Jne(x86Label),
     /// to
-    Jno(x86BB),
+    Jno(x86Label),
     /// to
-    Jnz(x86BB),
+    Jnz(x86Label),
     /// to
-    Jo(x86BB),
+    Jo(x86Label),
     /// to
-    Jz(x86BB),
+    Jz(x86Label),
     /// dst, rs1
     Lea(x86Value, x86Value),
     /// dst, rs1

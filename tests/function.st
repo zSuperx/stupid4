@@ -1,7 +1,7 @@
-fn foo() {
-
+fn foo(a: i32): i32 {
+  return a;
 }
 
-fn main() {
-  foo();
+fn main(): i32 {
+  return foo(69);
 }

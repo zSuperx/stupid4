@@ -1,3 +1,5 @@
+use shrimple::stir::builder::IRModule;
+
 use crate::IRs::hir::HirObj;
 use crate::driver::args::*;
 use crate::parser::parse_file;
@@ -15,14 +17,15 @@ pub fn run() {
     for obj in objects {
         match obj.inner {
             HirObj::Fn(hir_function) => {
-                objs.push(tu.check_func(hir_function));
+                objs.push(hir_function.type_check(&mut tu));
             }
             _ => {}
         }
     }
 
+    let mut builder = IRModule::new();
+
     for obj in objs {
-        let mut x = tu.codegen_func(obj);
-        x.print(CFG.verbose);
+        let mut x = obj.codegen(&mut builder);
     }
 }

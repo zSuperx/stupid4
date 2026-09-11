@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use crate::stir::{
-    builder::{IRBB, IRFunction},
+    builder::{IRLabel, IRFunction},
     isa::IRInstr,
 };
 
 impl IRFunction {
     /// Searches for all blocks that terminate with a `Ret` or `Retv`.
-    pub(crate) fn find_leaf_blocks(&mut self) -> HashSet<IRBB> {
+    pub(crate) fn find_leaf_blocks(&mut self) -> HashSet<IRLabel> {
         let mut exitpoints = HashSet::new();
         self.dfs(|self_, curr_id| {
             let curr = self_.blocks.get(&curr_id).unwrap();

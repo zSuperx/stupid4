@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, OnceLock};
 
 use crate::IRs::hir::{HirFunction, HirObj};
+use crate::IRs::tir::{TirFunction, TirStmt};
 use crate::common::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use registry::Registry;
-use shrimple::stir::builder::IRBB;
+use shrimple::stir::builder::IRLabel;
 use shrimple::stir::isa::IRValue;
 
 use crate::ast::*;
@@ -22,13 +23,16 @@ pub struct GlobalState {
     /// Uniquely ID'd scoped identifiers
     pub symbols: Rc<RefCell<Registry<String>>>,
 
-    /// Distinguishes shadowed vars
     pub symbol_counter: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FunctionContext {
-    pub symbol: Option<Symbol>,
+    pub name: Spanned<&'static str>,
+
+    pub symbol: Symbol,
+
+    pub return_type: TypeId,
 
     /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
     /// most (current) scope, going up in scopes on failure
@@ -40,9 +44,9 @@ pub struct FunctionContext {
     /// Use in sema to validate use of continue/break
     pub loop_depth: usize,
 
-    pub return_type: Option<TypeId>,
-
     pub symbol_table: HashMap<Symbol, SymbolInfo>,
+
+    pub body: Option<TirStmt>,
 }
 
 #[derive(Debug, Default)]
@@ -50,11 +54,20 @@ pub struct TranslationUnit {
     /// Global string to symbol map
     ///
     /// Contains names of functions and global variables
-    top_level_scope: HashMap<&'static str, Symbol>,
+    pub top_level_scope: HashMap<&'static str, Symbol>,
 
-    symbol_table: HashMap<Symbol, SymbolInfo>,
+    pub global_symbol_table: HashMap<Symbol, SymbolInfo>,
 
-    pub current_function: FunctionContext,
+    /// Distinguishes shadowed vars
+    symbol_counter: usize,
+}
+
+pub fn next_symbol(name: &'static str) -> Symbol {
+    let state = global_state();
+    state.symbols.borrow_mut().add(format!("{name}.{}", {
+        state.symbol_counter += 1;
+        state.symbol_counter - 1
+    }))
 }
 
 impl TranslationUnit {
@@ -62,53 +75,17 @@ impl TranslationUnit {
         Self::default()
     }
 
-    pub fn add_local_symbol(
-        &mut self,
-        name: Spanned<&'static str>,
-        ty: TypeId,
-        kind: SymbolKind,
-    ) -> Symbol {
-        let symbol = next_symbol(name.inner);
-        self.current_function.env.insert(name.inner, symbol);
-        self.current_function.symbol_table.insert(
-            symbol,
-            SymbolInfo {
-                symbol,
-                raw_name: name,
-                ty,
-                kind,
-                address_taken: Default::default(),
-                value: Default::default(),
-            },
-        );
-        symbol
+    pub fn add_function(&mut self) {
+        todo!()
     }
 
-    pub fn lookup_symbol(&mut self, symbol: Symbol) -> &SymbolInfo {
-        match self.current_function.symbol_table.get(&symbol) {
-            Some(i) => i,
-            None => die!("Symbol not found: {symbol}"),
-        }
-    }
-
-    /// Resets all compiler context regarding the current function.
-    pub fn reset_function_state(&mut self, symbol: Symbol, return_type: TypeId) {
-        self.current_function = FunctionContext {
-            symbol: Some(symbol),
-            return_type: Some(return_type),
-            ..Default::default()
-        };
-        self.current_function
-            .env
-            .push_filled_scope(self.top_level_scope.clone());
-    }
-
-    pub fn current_function_name(&self) -> Spanned<&'static str> {
-        self.symbol_table
-            .get(self.current_function.symbol.as_ref().unwrap())
-            .unwrap()
-            .raw_name
-    }
+    // pub fn lookup_symbol(&mut self, symbol: Symbol) -> &SymbolInfo {
+    //     match self.current_function.symbol_table.get(&symbol) {
+    //         Some(i) => i,
+    //         None => die!("Symbol not found: {symbol}"),
+    //     }
+    // }
+    //
 
     /// Reads all parsed objects and registers global symbols and global types.
     ///
@@ -125,20 +102,20 @@ impl TranslationUnit {
     }
 
     /// Resolves a Type::Unresolved(..) into a Type
-    pub fn resolve_type(&mut self, s @ Spanned { inner: ty, span }: &Spanned<TypeId>) -> TypeId {
+    pub fn resolve_type(&mut self, ty: TypeId) -> TypeId {
         match ty.lookup() {
             Type::Unresolved(name) => {
                 let Some(id) = global_state().type_names.get(name) else {
-                    die!("Unknown type {s}")
+                    die!("Unknown type {ty}")
                 };
                 *id
             }
             Type::Function { .. } => todo!(),
             Type::Pointer(id) => {
-                let inner_ty = self.resolve_type(&Spanned::new(*id, *span));
+                let inner_ty = self.resolve_type(*id);
                 add_type(Type::Pointer(inner_ty))
             }
-            _ => s.inner,
+            _ => ty,
         }
     }
 
@@ -153,7 +130,7 @@ impl TranslationUnit {
                     name: name.inner,
                     fields: fields
                         .iter()
-                        .map(|(n, t)| (n.inner, self.resolve_type(t)))
+                        .map(|(n, t)| (n.inner, self.resolve_type(t.inner)))
                         .collect(),
                 });
                 global_state().type_names.insert(name.inner, s);
@@ -167,24 +144,24 @@ impl TranslationUnit {
         match obj {
             HirObj::Fn(HirFunction {
                 name,
-                returns,
+                return_type: returns,
                 args,
                 ..
             }) => {
                 let mut arg_types = vec![];
                 for (_, ty) in args.iter() {
-                    let resolved_ty = self.resolve_type(ty);
+                    let resolved_ty = self.resolve_type(ty.inner);
                     arg_types.push(resolved_ty);
                 }
-                let return_ty = self.resolve_type(returns);
+                let return_ty = self.resolve_type(returns.inner);
                 let function_ty = Type::Function {
-                    arg_tys: arg_types,
-                    return_ty,
+                    arg_types,
+                    return_type: return_ty,
                 };
                 let ty = add_type(function_ty);
                 let symbol = next_symbol(name.inner);
                 self.top_level_scope.insert(name.inner, symbol);
-                self.symbol_table.insert(
+                self.global_symbol_table.insert(
                     symbol,
                     SymbolInfo {
                         symbol,
@@ -231,13 +208,6 @@ pub fn add_type(ty: Type) -> TypeId {
     global_state().types.borrow_mut().add(ty)
 }
 
-pub fn next_symbol(name: &str) -> Symbol {
-    let state = global_state();
-    let id = state.symbol_counter;
-    state.symbol_counter += 1;
-    state.symbols.borrow_mut().add(format!("{name}.{id}"))
-}
-
 impl GlobalState {
     pub fn new() -> Self {
         let mut s = Self::default();
@@ -260,11 +230,45 @@ impl GlobalState {
     }
 }
 
+pub fn lookup_ident<'a, 'b, 'c>(
+    tu: &'a mut TranslationUnit,
+    tf: &'b mut TirFunction,
+    ident: &'static str,
+) -> Option<&'c SymbolInfo>
+where
+    'a: 'c,
+    'b: 'c,
+{
+    let Some(symbol) = tf.env.get(&ident) else {
+        return None;
+    };
+    Some(lookup_symbol(tu, tf, symbol))
+}
+
+pub fn lookup_symbol<'a, 'b, 'c>(
+    tu: &'a mut TranslationUnit,
+    tf: &'b mut TirFunction,
+    symbol: Symbol,
+) -> &'c SymbolInfo
+where
+    'a: 'c,
+    'b: 'c,
+{
+    match tf.symbol_table.get(&symbol) {
+        Some(i) => i,
+        None => {
+            tu.global_symbol_table
+                .get(&symbol)
+                .expect("Could not find symbol: {symbol}")
+        }
+    }
+}
+
 /// `continue` jumps to COND_BB and `break` jumps to END_BB
 #[derive(Debug, Clone, Copy)]
 pub struct LoopLabels {
-    pub cond_block: IRBB,
-    pub end_block: IRBB,
+    pub cond_block: IRLabel,
+    pub end_block: IRLabel,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

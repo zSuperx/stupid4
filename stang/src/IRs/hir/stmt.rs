@@ -21,7 +21,7 @@ pub enum HirStmt {
         then_: Box<Spanned<HirStmt>>,
         else_: Box<Spanned<HirStmt>>,
     },
-    Return(Spanned<HirExpr>),
+    Return(Option<Spanned<HirExpr>>),
     Block(Vec<Spanned<HirStmt>>),
     Expr(Spanned<HirExpr>),
 }

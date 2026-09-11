@@ -1,4 +1,4 @@
-use crate::common::basicblock::RewriteAction;
+use crate::common::RewriteAction;
 use crate::target::x86::Backend;
 use crate::target::x86::isa::*;
 

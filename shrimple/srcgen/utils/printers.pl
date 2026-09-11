@@ -216,7 +216,7 @@ sub printAll {
 
 
 // Common imports needed by all ISAs:
-use crate::common::traits::InstructionTrait;
+use crate::common::InstructionTrait;
 use smallvec::{SmallVec, smallvec};
 use $isa->{instrName}::*;
 

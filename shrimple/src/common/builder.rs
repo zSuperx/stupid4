@@ -10,7 +10,7 @@
 //! For example, the STIR ISA defines its `IRFunction` as follows:
 //!
 //! `pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType>;`
-use std::cell::{RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -19,8 +19,7 @@ use registry::{Id, Registry};
 
 use crate::stir::isa::IRType;
 
-use super::basicblock::{BBID, BasicBlock};
-use super::traits::InstructionTrait;
+use crate::common::{BasicBlock, InstructionTrait, Label};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructDef {
@@ -31,17 +30,46 @@ pub struct StructDef {
 
 pub type StructId = Id<StructDef>;
 
-#[derive(Debug, Clone)]
-pub struct FunctionBuilder<I: InstructionTrait, V, T> {
-    pub(crate) name: &'static str,
-    pub(crate) cursor: BBID<I>,
-    pub(crate) args: Vec<(V, T)>,
-    pub(crate) return_type: T,
-    pub(crate) entrypoint: BBID<I>,
+#[derive(Default, Debug)]
+pub struct ModuleBuilder<I: InstructionTrait, V, T> {
+    pub(crate) functions: BTreeMap<String, FunctionBuilder<I, V, T>>,
     pub(crate) reg_count: usize,
     pub(crate) block_count: usize,
     pub(crate) structs: Rc<RefCell<Registry<StructDef>>>,
-    pub(crate) blocks: BTreeMap<BBID<I>, BasicBlock<I>>,
+}
+
+impl<I: InstructionTrait, V, T> ModuleBuilder<I, V, T> {
+    pub fn new() -> Self {
+        Self {
+            functions: Default::default(),
+            reg_count: 0,
+            block_count: 0,
+            structs: Default::default(),
+        }
+    }
+    pub fn createFunction(
+        &mut self,
+        name: String,
+        return_type: T,
+    ) -> &mut FunctionBuilder<I, V, T> {
+        let f = FunctionBuilder::new(name.clone(), return_type);
+        let None = self.functions.insert(name.clone(), f) else {
+            panic!("Duplicate function");
+        };
+        self.functions.get_mut(&name).unwrap()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionBuilder<I: InstructionTrait, V, T> {
+    pub(crate) name: String,
+    pub(crate) cursor: Label<I>,
+    pub(crate) args: Vec<(V, T)>,
+    pub(crate) return_type: T,
+    pub(crate) entrypoint: Label<I>,
+    pub(crate) reg_count: usize,
+    pub(crate) block_count: usize,
+    pub(crate) blocks: BTreeMap<Label<I>, BasicBlock<I>>,
 }
 
 /// Given an `IRBuilder<I>` and format args, expands to `$builder.emit(Comment(format!(...)))`
@@ -61,8 +89,8 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
     ///
     /// The insert point is set to this entrypoint, so you can start emitting immediately after
     /// creating it.
-    pub fn new(name: &'static str, return_type: T) -> Self {
-        let cursor = BBID(name, "entrypoint", 0, PhantomData::default());
+    pub fn new(name: String, return_type: T) -> Self {
+        let cursor = Label("entrypoint", 0, PhantomData::default());
         let blocks = BTreeMap::from([(cursor, BasicBlock::empty())]);
         let block_count = 1;
         let reg_count = 0;
@@ -76,21 +104,11 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
             blocks,
             entrypoint: cursor,
             args: Default::default(),
-            structs: Default::default(),
         }
     }
 
     pub fn addArg(&mut self, arg_value: V, arg_type: T) {
         self.args.push((arg_value, arg_type));
-    }
-
-    pub fn addStruct(&mut self, s: StructDef) -> Id<StructDef> {
-        self.structs.borrow_mut().add(s)
-    }
-
-    /// Returns the name of the function
-    pub fn name(&self) -> &'static str {
-        self.name
     }
 
     pub fn getRegCount(&self) -> usize {
@@ -118,11 +136,11 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
         })
     }
 
-    pub fn setInsertPoint(&mut self, block: BBID<I>) {
+    pub fn setInsertPoint(&mut self, block: Label<I>) {
         self.cursor = block;
     }
 
-    pub fn getInsertPoint(&mut self) -> BBID<I> {
+    pub fn getInsertPoint(&mut self) -> Label<I> {
         self.cursor
     }
 
@@ -130,48 +148,48 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
         &self.return_type
     }
 
-    pub fn newBlock(&mut self) -> BBID<I> {
-        let id = BBID(self.name, "", self.block_count, Default::default());
+    pub fn newBlock(&mut self) -> Label<I> {
+        let id = Label("", self.block_count, Default::default());
         self.block_count += 1;
         self.blocks.insert(id, BasicBlock::empty());
         id
     }
 
-    pub fn newNamedBlock(&mut self, block_name: &'static str) -> BBID<I> {
-        let id = BBID(self.name, block_name, self.block_count, Default::default());
+    pub fn newNamedBlock(&mut self, block_name: &'static str) -> Label<I> {
+        let id = Label(block_name, self.block_count, Default::default());
         self.block_count += 1;
         self.blocks.insert(id, BasicBlock::new(block_name));
         id
     }
 
     /// Retrieves the entrypoint of the function
-    pub fn getEntryPoint(&self) -> BBID<I> {
+    pub fn getEntryPoint(&self) -> Label<I> {
         self.entrypoint
     }
 
     /// Replaces a function's entrypoint, returning the old one
-    pub fn setEntryPoint(&mut self, new_entrypoint: BBID<I>) -> BBID<I> {
+    pub fn setEntryPoint(&mut self, new_entrypoint: Label<I>) -> Label<I> {
         let ret = self.entrypoint;
         self.entrypoint = new_entrypoint;
         ret
     }
 
     #[inline]
-    pub fn removeFallthrough(&mut self) -> Option<BBID<I>> {
+    pub fn removeFallthrough(&mut self) -> Option<Label<I>> {
         self.removeFallthroughFrom(self.cursor)
     }
 
-    pub fn removeFallthroughFrom(&mut self, this: BBID<I>) -> Option<BBID<I>> {
+    pub fn removeFallthroughFrom(&mut self, this: Label<I>) -> Option<Label<I>> {
         let this_block = self.blocks.get_mut(&this).unwrap();
         this_block.fallthrough.take()
     }
 
     #[inline]
-    pub fn addFallthrough(&mut self, fallthrough: BBID<I>) {
+    pub fn addFallthrough(&mut self, fallthrough: Label<I>) {
         self.addFallthroughTo(self.cursor, fallthrough);
     }
 
-    pub fn addFallthroughTo(&mut self, this: BBID<I>, fallthrough: BBID<I>) {
+    pub fn addFallthroughTo(&mut self, this: Label<I>, fallthrough: Label<I>) {
         let this_block = self.blocks.get_mut(&this).unwrap();
         this_block.fallthrough = Some(fallthrough);
         this_block.successors.insert(fallthrough);
@@ -181,11 +199,11 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
     }
 
     #[inline]
-    pub fn addSuccessors(&mut self, successors: &[BBID<I>]) {
+    pub fn addSuccessors(&mut self, successors: &[Label<I>]) {
         self.addSuccessorsTo(self.cursor, successors);
     }
 
-    pub fn addSuccessorsTo(&mut self, this: BBID<I>, successors: &[BBID<I>]) {
+    pub fn addSuccessorsTo(&mut self, this: Label<I>, successors: &[Label<I>]) {
         for succ_id in successors {
             let this_block = self.blocks.get_mut(&this).unwrap();
             this_block.successors.insert(*succ_id);
@@ -196,11 +214,11 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
     }
 
     #[inline]
-    pub fn addPredecessors(&mut self, successors: &[BBID<I>]) {
+    pub fn addPredecessors(&mut self, successors: &[Label<I>]) {
         self.addPredecessorsTo(self.cursor, successors);
     }
 
-    pub fn addPredecessorsTo(&mut self, this: BBID<I>, predecessors: &[BBID<I>]) {
+    pub fn addPredecessorsTo(&mut self, this: Label<I>, predecessors: &[Label<I>]) {
         for pred_id in predecessors {
             assert_eq!(this.0, pred_id.0);
             let this_block = self.blocks.get_mut(&this).unwrap();
@@ -227,13 +245,13 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
         self.blocks[&self.cursor].terminator.is_some()
     }
 
-    pub fn isTerminated(&self, this: BBID<I>) -> bool {
+    pub fn isTerminated(&self, this: Label<I>) -> bool {
         self.blocks[&this].terminator.is_some()
     }
 
     pub fn dfs_short_circuit(
         &mut self,
-        mut visitor: impl FnMut(&mut Self, BBID<I>) -> bool,
+        mut visitor: impl FnMut(&mut Self, Label<I>) -> bool,
     ) -> bool {
         let mut stack = vec![self.entrypoint];
         let mut seen = HashSet::new();
@@ -261,7 +279,7 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
         false
     }
 
-    pub fn dfs(&mut self, mut visitor: impl FnMut(&mut Self, BBID<I>)) {
+    pub fn dfs(&mut self, mut visitor: impl FnMut(&mut Self, Label<I>)) {
         let mut stack = vec![self.entrypoint];
         let mut seen = HashSet::new();
 

@@ -5,7 +5,7 @@ use crate::target::x86::isa::*;
 
 impl x86Function {
     /// Searches for all blocks that terminate with a `Ret` or `Retv`.
-    pub(crate) fn find_leaf_blocks(&mut self) -> HashSet<x86BB> {
+    pub(crate) fn find_leaf_blocks(&mut self) -> HashSet<x86Label> {
         let mut exitpoints = HashSet::new();
         self.dfs(|self_, curr_id| {
             let curr = self_.blocks.get(&curr_id).unwrap();

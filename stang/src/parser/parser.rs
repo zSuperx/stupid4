@@ -130,7 +130,7 @@ impl Parser {
 
         let obj = HirObj::Fn(HirFunction {
             name,
-            returns,
+            return_type: returns,
             args,
             body,
         });
@@ -204,9 +204,9 @@ impl Parser {
             Token::Return => {
                 self.lexer.eat();
                 let ret_val = if self.lexer.is_next(Token::Semi) {
-                    tok.map(|_| HirExpr::Void)
+                    None
                 } else {
-                    self.parse_expr()
+                    Some(self.parse_expr())
                 };
                 let stmt = HirStmt::Return(ret_val);
                 self.lexer.expect(Token::Semi);

@@ -10,7 +10,7 @@ require "$Bin/utils/printers.pl";
 my $TY = "IRType";
 my $VAL = "IRValue";
 my $INSTR = "IRInstr";
-my $BB = "IRBB";
+my $LABEL = "IRLabel";
 
 # templates
 my $binOp = {
@@ -49,12 +49,12 @@ my $isa = {
     trunc => $resizeOp,
 
     call => {
-      args => [ "ty:$TY", "dst:$VAL", "name:&'static str", "args:SmallVec<[$VAL; 4]>" ],
+      args => [ "ty:$TY", "dst:$VAL", "callee:String", "args:SmallVec<[$VAL; 4]>" ],
       defs => [ "dst" ],
       uses_raw => "args.iter().collect()", # args is itself a smallvec, so use it raw
       fmt_raw => q~{
               let args_str = args.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
-              f.write_fmt(format_args!("{dst} = {name}({args_str})"))
+              f.write_fmt(format_args!("{dst} = {callee}({args_str})"))
           }
       ~,
     },
@@ -100,13 +100,13 @@ my $isa = {
     },
 
     br => {
-      args => [ "val:$VAL", "truebb:$BB", "falsebb:$BB" ],
+      args => [ "val:$VAL", "truebb:$LABEL", "falsebb:$LABEL" ],
       uses => [ "val" ],
       term => 1,
     },
 
     jmp => {
-      args => [ "to:$BB" ],
+      args => [ "to:$LABEL" ],
       term => 1,
     },
 

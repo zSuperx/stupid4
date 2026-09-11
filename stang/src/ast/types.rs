@@ -1,5 +1,6 @@
 use std::hash::Hash;
 
+use crate::{die, translation_unit::add_type};
 use registry::*;
 use shrimple::stir::isa::IRType;
 
@@ -27,8 +28,8 @@ pub enum Type {
         fields: Vec<(&'static str, TypeId)>,
     },
     Function {
-        arg_tys: Vec<TypeId>,
-        return_ty: TypeId,
+        arg_types: Vec<TypeId>,
+        return_type: TypeId,
     },
     Pointer(TypeId),
 }
@@ -73,8 +74,9 @@ impl Type {
 
     pub fn get_pointee(&self) -> TypeId {
         match self {
+            Type::Pointer(f) if let Type::Function { .. } = f.lookup() => add_type(self.clone()),
             Type::Pointer(p) => *p,
-            _ => panic!("Not a pointer type: {self}"),
+            _ => die!("Not a pointer type: {self}"),
         }
     }
 
@@ -109,12 +111,12 @@ impl Type {
         match self {
             Type::I8 | Type::U8 => IRType::I8,
             Type::I16 | Type::U16 => IRType::I16,
-            Type::I32 | Type::U32 => IRType::I32,
+            Type::I32 | Type::U32 | Type::Void => IRType::I32,
             Type::I64 | Type::U64 => IRType::I64,
             Type::Bool => IRType::I8,
             Type::Pointer(..) => IRType::Ptr,
             Type::Base { .. } => IRType::Ptr,
-            Type::Function { .. } => todo!(),
+            Type::Function { .. } => IRType::Ptr,
             _ => panic!("Can't lower {self:?} type"),
         }
     }
@@ -124,7 +126,10 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Type::Base { name, .. } => format_args!("{}", *name),
-            Type::Function { arg_tys: args, return_ty: returns } => {
+            Type::Function {
+                arg_types: args,
+                return_type: returns,
+            } => {
                 format_args!(
                     "Fn({}) -> {}",
                     args.iter()

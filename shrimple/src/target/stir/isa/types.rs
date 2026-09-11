@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::common::builder::StructId;
+// use crate::common::StructId;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum IRType {
@@ -10,7 +10,7 @@ pub enum IRType {
     I32,
     I64,
     Ptr,
-    Struct(StructId),
+    Struct,
 }
 
 impl Display for IRType {
@@ -32,7 +32,7 @@ impl IRType {
             IRType::I16 => 16,
             IRType::I32 => 32,
             IRType::I64 | IRType::Ptr => 64,
-            IRType::Struct(s) => s.size * 8,
+            IRType::Struct => todo!(),
         }
     }
 

@@ -12,7 +12,7 @@ impl Backend {
         let mut curr_reg = registers.next();
         // let mut new_args = vec![];
         for (i, (arg_val, arg_ty)) in stir_function.args.iter().enumerate() {
-            if let IRType::Struct(struct_id) = arg_ty {
+            if let IRType::Struct = arg_ty {
                 todo!("System V ABI: Handle structs")
             } else {
                 // Primitive type arguments each consume a single eightbyte register

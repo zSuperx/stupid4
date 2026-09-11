@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use bitset::BitSet;
 
-use crate::{common::traits::InstructionTrait, target::x86::builder::{x86BB, x86Function}};
+use crate::{common::InstructionTrait, target::x86::builder::{x86Label, x86Function}};
 
 impl x86Function {
     /// Performs liveness analysis and returns a ???
@@ -10,8 +10,8 @@ impl x86Function {
         let mut exitpoints = self.find_leaf_blocks();
         let mut worklist = vec![];
 
-        let mut LIVE_IN = BTreeMap::<x86BB, BitSet>::new();
-        let mut LIVE_OUT = BTreeMap::<x86BB, BitSet>::new();
+        let mut LIVE_IN = BTreeMap::<x86Label, BitSet>::new();
+        let mut LIVE_OUT = BTreeMap::<x86Label, BitSet>::new();
 
         // Insert empty sets for every reachable block
         self.dfs(|self_, curr_id| {

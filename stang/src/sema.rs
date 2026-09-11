@@ -1,158 +1,170 @@
 use crate::IRs::{hir::*, tir::*};
 use crate::ast::*;
 use crate::common::*;
-use crate::translation_unit::{SymbolInfo, SymbolKind, TranslationUnit, add_type, next_symbol};
+use crate::translation_unit::{
+    FunctionContext, SymbolInfo, SymbolKind, TranslationUnit, add_type, lookup_ident, lookup_symbol,
+};
 
-impl TranslationUnit {
-    pub fn check_func(&mut self, hf: HirFunction) -> TirFunction {
-        let return_type = self.resolve_type(&hf.returns);
-        let symbol = next_symbol(hf.name.inner);
+impl HirFunction {
+    /// Type checking a HIR Function produces a TIR Function, which holds the necessary context for
+    /// code generation
+    pub fn type_check(self, tu: &mut TranslationUnit) -> TirFunction {
+        let return_type = tu.resolve_type(self.return_type.inner);
+        let symbol = tu.top_level_scope.get(self.name.inner).copied().unwrap();
 
-        self.reset_function_state(symbol, return_type);
-
-        for (i, (raw_arg, raw_ty)) in hf.args.into_iter().enumerate() {
-            let ty = self.resolve_type(&raw_ty);
-            self.add_local_symbol(raw_arg, ty, SymbolKind::Arg(i));
-        }
-
-        let body = self.check_stmt(hf.body);
-        TirFunction {
-            name: hf.name,
+        let mut tf = TirFunction {
+            name: self.name,
             symbol,
-            symbol_table: std::mem::take(&mut self.current_function.symbol_table),
             return_type,
-            body,
+            env: Default::default(),
+            loop_labels: Default::default(),
+            loop_depth: Default::default(),
+            symbol_table: Default::default(),
+            symbol_counter: Default::default(),
+            body: Default::default(),
+        };
+        tf.env.push_filled_scope(tu.top_level_scope.clone());
+
+        let mut args = vec![];
+        for (i, (raw_arg_name, raw_arg_type)) in self.args.into_iter().enumerate() {
+            let arg_symbol = tf.add_local_symbol(
+                raw_arg_name,
+                tu.resolve_type(raw_arg_type.inner),
+                SymbolKind::Arg(i),
+            );
+            args.push(arg_symbol)
         }
+
+        let body = self.body.type_check(tu, &mut tf);
+        tf.body = Some(body);
+        tf
     }
+}
 
-    fn check_stmt(&mut self, Spanned { inner: stmt, span }: Spanned<HirStmt>) -> TirStmt {
-        match stmt {
+impl Spanned<HirStmt> {
+    // Type checking a HIR statement requires the context of its parent function
+    pub fn type_check(&self, tu: &mut TranslationUnit, tf: &mut TirFunction) -> TirStmt {
+        let span = self.span;
+        match &self.inner {
             HirStmt::Let { lhs, ty, rhs } => {
-                let ty = ty.map(|t| self.resolve_type(&t));
-                let checked_rhs = self.check_rvalue_expr(&rhs, ty);
-
-                if let Some(ty) = ty
-                    && ty != checked_rhs.ty
+                let desired_type = ty.map(|t| tu.resolve_type(t.inner));
+                let checked_rhs = rhs.type_check_rvalue(tu, tf, desired_type);
+                if let Some(lhs_ty) = desired_type
+                    && lhs_ty != checked_rhs.ty
                 {
-                    die!(
-                        "Type mismatch. Expected {ty} but got {}: {span}",
-                        checked_rhs.ty,
-                    );
+                    die!("Expected type {lhs_ty} but got {}: {span}", checked_rhs.ty);
                 }
-                let var_ty = checked_rhs.ty;
 
-                let lhs_symbol = self.add_local_symbol(lhs, var_ty, SymbolKind::Local);
-                println!("Adding local symbol: {} -> {lhs_symbol}", lhs.inner);
-
+                let rhs_ty = if let Type::Function { .. } = checked_rhs.ty.lookup() {
+                    add_type(Type::Pointer(checked_rhs.ty))
+                } else {
+                    checked_rhs.ty
+                };
+                let symbol = tf.add_local_symbol(*lhs, rhs_ty, SymbolKind::Local);
                 TirStmt::Let {
-                    lhs: lhs_symbol,
+                    lhs: symbol,
                     rhs: checked_rhs,
                 }
             }
             HirStmt::While { cond, body } => {
-                let checked_cond = self.check_rvalue_expr(&cond, None);
+                let hint = add_type(Type::Bool);
+                let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
                 let cond_ty = checked_cond.ty;
                 if *cond_ty != Type::Bool {
-                    die!(
-                        "Type mismatch. Expected `{}` but got {}",
-                        Type::Bool,
-                        span.wrap(cond_ty)
-                    )
+                    die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
-                self.current_function.env.push_scope();
-                self.current_function.loop_depth += 1;
-                let checked_body = self.check_stmt(*body);
-                self.current_function.loop_depth -= 1;
-                self.current_function.env.pop_scope();
+
+                tf.env.push_scope();
+                tf.loop_depth += 1;
+                let checked_body = body.type_check(tu, tf);
+                tf.loop_depth -= 1;
+                tf.env.pop_scope();
+
                 TirStmt::While {
                     cond: checked_cond,
                     body: Box::new(checked_body),
                 }
             }
             HirStmt::Continue => {
-                if self.current_function.loop_depth > 0 {
-                    TirStmt::Continue
-                } else {
-                    die!("Continue statements can only be used inside a loop body: {span}");
+                if tf.loop_depth == 0 {
+                    die!("continue statements can only be called within loops");
                 }
+                TirStmt::Continue
             }
             HirStmt::Break => {
-                if self.current_function.loop_depth > 0 {
-                    TirStmt::Break
-                } else {
-                    die!("Break statements can only be used inside a loop body: {span}");
+                if tf.loop_depth == 0 {
+                    die!("break statements can only be called within loops");
                 }
+                TirStmt::Break
             }
             HirStmt::If { cond, then_, else_ } => {
-                let checked_cond = self.check_rvalue_expr(&cond, None);
+                let hint = add_type(Type::Bool);
+                let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
                 let cond_ty = checked_cond.ty;
                 if *cond_ty != Type::Bool {
-                    die!(
-                        "Type mismatch. Expected `{}` but got {cond_ty}: {span}",
-                        Type::Bool,
-                    )
+                    die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
-                let checked_then = Box::new(self.check_stmt(*then_));
-                let checked_else = Box::new(self.check_stmt(*else_));
+                let checked_then = Box::new(then_.type_check(tu, tf));
+                let checked_else = Box::new(else_.type_check(tu, tf));
                 TirStmt::If {
                     cond: checked_cond,
                     then_: checked_then,
                     else_: checked_else,
                 }
             }
-            HirStmt::Return(val) => {
-                let returns = self.current_function.return_type.unwrap();
-
-                let checked_val = self.check_rvalue_expr(&val, Some(returns));
-                if checked_val.ty != returns {
-                    die!(
-                        "Mismatched return type. Function expects {returns} but got {}: {}",
-                        checked_val.ty,
-                        self.current_function_name()
-                    )
-                }
-
-                if *returns == Type::Void {
-                    TirStmt::Return(None)
+            HirStmt::Return(expr) => {
+                let ret_val = if let Some(expr) = expr {
+                    let checked_expr = expr.type_check_rvalue(tu, tf, Some(tf.return_type));
+                    if checked_expr.ty != tf.return_type {
+                        die!(
+                            "Function {} expected return type {}, but got {}: {span}",
+                            tf.name,
+                            tf.return_type,
+                            checked_expr.ty,
+                        );
+                    }
+                    Some(checked_expr)
                 } else {
-                    TirStmt::Return(Some(checked_val))
-                }
+                    if *tf.return_type != Type::Void {
+                        die!(
+                            "Function {} expected return type {}, but got void: {span}",
+                            tf.name,
+                            tf.return_type,
+                        )
+                    }
+                    None
+                };
+                TirStmt::Return(ret_val)
             }
-            HirStmt::Block(s) => {
-                self.current_function.env.push_scope();
-                let stmt = TirStmt::Block(s.into_iter().map(|st| self.check_stmt(st)).collect());
-                self.current_function.env.pop_scope();
-                stmt
+            HirStmt::Block(stmts) => {
+                TirStmt::Block(stmts.into_iter().map(|s| s.type_check(tu, tf)).collect())
             }
-            HirStmt::Expr(e) => {
-                let e = self.check_rvalue_expr(&e, None);
-                TirStmt::Expr(e)
-            }
+            HirStmt::Expr(stmt) => TirStmt::Expr(stmt.type_check_rvalue(tu, tf, None)),
         }
     }
+}
 
-    // NOTE: This should probably return a pointer?
-    fn check_lvalue_expr(
-        &mut self,
-        Spanned { inner: expr, span }: &Spanned<HirExpr>,
+impl Spanned<HirExpr> {
+    pub fn type_check_lvalue(
+        &self,
+        tu: &mut TranslationUnit,
+        tf: &mut TirFunction,
         hint: Option<TypeId>,
     ) -> TirExpr {
-        match expr {
-            // x = ...
-            HirExpr::Ident(symbol) => {
-                let Some(symbol) = self.current_function.env.get(symbol) else {
-                    die!("Undefined variable: {}", span.wrap(symbol));
+        let span = self.span;
+        match &self.inner {
+            HirExpr::Ident(i) => {
+                let Some(symbol) = tf.env.get(&i) else {
+                    die!("Use of undefined variable: {span}")
                 };
-                let SymbolInfo { ty, .. } = self.lookup_symbol(symbol);
-                let ptr_ty = add_type(Type::Pointer(*ty));
                 let kind = TirExprKind::AddrOf(symbol);
-                TirExpr::new(kind, ptr_ty)
+                let inner_ty = lookup_symbol(tu, tf, symbol).ty;
+                let ty = add_type(Type::Pointer(inner_ty));
+                TirExpr::new(kind, ty)
             }
-
-            // x[i] = ...
             HirExpr::Index { base, index } => {
-                let checked_base = self.check_rvalue_expr(base, hint);
-                let checked_index = self.check_rvalue_expr(index, Some(add_type(Type::U64)));
+                let checked_base = base.type_check_rvalue(tu, tf, hint);
+                let checked_index = index.type_check_rvalue(tu, tf, Some(add_type(Type::U64)));
                 if !checked_base.ty.is_pointer() {
                     die!(
                         "Can't index into non-pointer type {}: {base}",
@@ -175,29 +187,27 @@ impl TranslationUnit {
                 };
                 TirExpr::new(kind, ty)
             }
-
-            // *x = ...
             HirExpr::Deref { inner } => {
-                let ptr = self.check_rvalue_expr(inner, hint);
-                assert!(ptr.ty.is_pointer());
+                let ptr = inner.type_check_rvalue(tu, tf, hint);
+                if !ptr.ty.is_pointer() {
+                    die!("Cannot dereference non-pointer type {}: {span}", ptr.ty);
+                }
                 ptr
             }
-            _ => die!(
-                "This expression not a valid LVALUE and therefore cannot be assigned to! {span}"
-            ),
+            HirExpr::Field { base, field } => todo!(),
+            _ => die!("Invalid LVALUE expression: {span}"),
         }
     }
 
-    fn check_rvalue_expr(
-        &mut self,
-        Spanned { inner: expr, span }: &Spanned<HirExpr>,
+    pub fn type_check_rvalue(
+        &self,
+        tu: &mut TranslationUnit,
+        tf: &mut TirFunction,
         hint: Option<TypeId>,
     ) -> TirExpr {
-        match expr {
-            HirExpr::Void => {
-                let kind = TirExprKind::Void;
-                TirExpr::new(kind, add_type(Type::Void))
-            }
+        let span = self.span;
+        match &self.inner {
+            HirExpr::Void => todo!(),
             HirExpr::Num(int_str) => {
                 let ty = match hint {
                     Some(hint_id) => {
@@ -234,15 +244,36 @@ impl TranslationUnit {
                 let kind = TirExprKind::Bool(*b);
                 TirExpr::new(kind, ty)
             }
+            HirExpr::Ident(i) => {
+                let Some(info) = lookup_ident(tu, tf, i) else {
+                    die!("Use of undefined variable {i}: {span}")
+                };
+
+                match info.ty.lookup() {
+                    Type::Function { .. } => {
+                        let kind = TirExprKind::AddrOf(info.symbol);
+                        let ty = add_type(Type::Pointer(info.ty));
+                        TirExpr::new(kind, ty)
+                    }
+                    _ => {
+                        let kind = TirExprKind::ValueOf(info.symbol);
+                        TirExpr::new(kind, info.ty)
+                    }
+                }
+            }
             HirExpr::Assign { lhs, rhs } => {
                 // This should become a Store?
                 // Check the LHS as an LVALUE. It must be a storage location
-                let checked_lhs = self.check_lvalue_expr(lhs, hint);
+                let checked_lhs = lhs.type_check_lvalue(tu, tf, None);
                 let lhs_ty = checked_lhs.ty.get_pointee();
 
                 // RHS can be anything
-                let checked_rhs = self.check_rvalue_expr(rhs, Some(lhs_ty));
-                let rhs_ty = checked_rhs.ty;
+                let checked_rhs = rhs.type_check_rvalue(tu, tf, Some(lhs_ty));
+                let rhs_ty = if let Type::Function { .. } = checked_rhs.ty.lookup() {
+                    add_type(Type::Pointer(checked_rhs.ty))
+                } else {
+                    checked_rhs.ty
+                };
 
                 // Since LHS is a storage location, it's technically a pointer
                 // so the RHS type should match whatever LHS is pointing to
@@ -258,106 +289,65 @@ impl TranslationUnit {
                 };
                 TirExpr::new(kind, ty)
             }
-            HirExpr::Ident(symbol) => {
-                let Some(symbol) = self.current_function.env.get(symbol) else {
-                    die!("Undefined variable: {}", span.wrap(symbol));
-                };
-                let SymbolInfo { ty, .. } = self.lookup_symbol(symbol);
-                let kind = TirExprKind::ValueOf(symbol);
-                TirExpr::new(kind, *ty)
+            HirExpr::AddrOf { inner } => inner.type_check_lvalue(tu, tf, None),
+            HirExpr::SizeOfTy { ty } => {
+                let kind = TirExprKind::Num(ty.inner.bytes() as i128);
+                let ty = add_type(Type::U64);
+                TirExpr::new(kind, ty)
             }
-            HirExpr::Index { .. } => {
-                // This is an rvalue, so it should always be a Load
-                let inner = self.check_lvalue_expr(&span.wrap(expr.clone()), hint);
-                let ty = inner.ty.get_pointee();
-                let kind = TirExprKind::Load {
-                    inner: Box::new(inner),
-                };
-
+            HirExpr::SizeOfExpr { expr } => {
+                let kind =
+                    TirExprKind::Num(expr.type_check_rvalue(tu, tf, None).ty.bytes() as i128);
+                let ty = add_type(Type::U64);
                 TirExpr::new(kind, ty)
             }
             HirExpr::Deref { inner } => {
-                // This is an rvalue, so it should always be a Load
-                let ptr = self.check_rvalue_expr(inner, hint);
-                if !ptr.ty.is_pointer() {
-                    die!("Cannot dereference non-pointer type {}", span.wrap(ptr));
-                }
+                let ptr = inner.type_check_rvalue(tu, tf, None);
                 let ty = ptr.ty.get_pointee();
+                println!("Dereferencing {} to {}", ptr.ty, ty);
                 let kind = TirExprKind::Load {
                     inner: Box::new(ptr),
                 };
                 TirExpr::new(kind, ty)
             }
-            HirExpr::Field { base, field } => {
-                let mut base = self.check_rvalue_expr(base, None);
-                let s = base.ty.lookup();
-                let Type::Base { fields, .. } = s else {
-                    die!("Type {s} is not a struct type. {span}");
-                };
-                let mut offset = 0;
-                let mut maybe_field_ty = None;
-                for (field_name, field_ty) in fields.iter() {
-                    if field_name == field {
-                        maybe_field_ty = Some(*field_ty);
-                        break;
-                    }
-                    // TODO: this can't be bytes, this is pointer math so it needs to be scaled down
-                    // by field size
-                    offset += field_ty.bytes();
+            HirExpr::Index { base, index } => {
+                let base = base.type_check_rvalue(tu, tf, None);
+                if !base.ty.is_pointer() {
+                    die!("Cannot index into non-pointer type {}: {span}", base.ty);
                 }
+                let hint = add_type(Type::U64);
+                let index = index.type_check_rvalue(tu, tf, Some(hint));
+                let ty = base.ty.get_pointee();
 
-                let Some(field_ty) = maybe_field_ty else {
-                    die!("Struct {s} has no field {field}");
-                };
-                base.ty = add_type(Type::Pointer(field_ty));
-                let ptr = {
-                    let num = {
-                        let kind = TirExprKind::Num(offset as i128);
-                        let ty = add_type(Type::U64);
-                        TirExpr::new(kind, ty)
-                    };
-                    let ty = add_type(Type::Pointer(field_ty));
+                let inner = {
+                    let ty = base.ty;
                     let kind = TirExprKind::Bin {
                         op: BinOp::PtrAdd,
                         lhs: Box::new(base),
-                        rhs: Box::new(num),
+                        rhs: Box::new(index),
                     };
                     TirExpr::new(kind, ty)
                 };
-                let kind = TirExprKind::Load {
-                    inner: Box::new(ptr),
-                };
 
-                TirExpr::new(kind, field_ty)
-            }
-            // I hope this is right...
-            HirExpr::AddrOf { inner } => self.check_lvalue_expr(inner, hint),
-            HirExpr::Cast { target_ty, rhs } => {
-                // TODO: enforce type casting rules
-                // Casting should be valid between:
-                // - Same sized types (this means all pointers can be cast to and from each other)
-                // - Any primitive with any other primitive
-                let checked_ty = self.resolve_type(target_ty);
-                let checked_rhs = Box::new(self.check_rvalue_expr(rhs, Some(checked_ty)));
-                let kind = TirExprKind::Cast {
-                    target_ty: checked_ty,
-                    expr: checked_rhs,
+                let kind = TirExprKind::Load {
+                    inner: Box::new(inner),
                 };
-                TirExpr::new(kind, checked_ty)
+                TirExpr::new(kind, ty)
             }
+            HirExpr::Field { base, field } => todo!(),
             HirExpr::Un { op, rhs } => {
-                let checked_rhs = self.check_rvalue_expr(rhs, hint);
+                let checked_rhs = rhs.type_check_rvalue(tu, tf, hint);
                 let rhs_ty = checked_rhs.ty;
                 let ty = match op {
                     UnOp::Not => {
                         if *rhs_ty != Type::Bool {
-                            die!("Cannot logical not a {}", span.wrap(rhs_ty))
+                            die!("Cannot logically not a {rhs_ty}: {span}")
                         }
                         rhs_ty
                     }
                     UnOp::Neg => {
                         if !rhs_ty.is_signed() {
-                            die!("Cannot negate a {}", span.wrap(rhs_ty))
+                            die!("Cannot negate a {rhs_ty}: {span}")
                         }
                         rhs_ty
                     }
@@ -369,9 +359,26 @@ impl TranslationUnit {
                 TirExpr::new(kind, ty)
             }
             HirExpr::Bin { op, lhs, rhs } => {
-                let lhs = self.check_rvalue_expr(lhs, hint);
+                enum BinType {
+                    Integral,
+                    Pointer,
+                    Other,
+                }
+
+                /// Helper to avoid making calls to `ty.is_pointer()` or `ty.is_integral()`
+                fn classify_type(ty: &Type) -> BinType {
+                    if ty.is_pointer() {
+                        BinType::Pointer
+                    } else if ty.is_integral() {
+                        BinType::Integral
+                    } else {
+                        BinType::Other
+                    }
+                }
+
+                let lhs = lhs.type_check_rvalue(tu, tf, hint);
                 let lhs_class = classify_type(lhs.ty.lookup());
-                let rhs = self.check_rvalue_expr(rhs, Some(lhs.ty));
+                let rhs = rhs.type_check_rvalue(tu, tf, Some(lhs.ty));
                 let rhs_class = classify_type(rhs.ty.lookup());
 
                 let (op, ty) = match (lhs_class, op, rhs_class) {
@@ -414,58 +421,104 @@ impl TranslationUnit {
                 };
                 TirExpr::new(kind, ty)
             }
-            HirExpr::Call { callee, args } => {
-                let callee = Box::new(self.check_rvalue_expr(callee, hint));
-                let Type::Function { return_ty, arg_tys } = callee.ty.lookup() else {
-                    die!("Function callee does not resolve to a function type: {span}");
+            HirExpr::Cast { target_ty, rhs } => {
+                // TODO: enforce type casting rules
+                // Casting should be valid between:
+                // - Same sized types (this means all pointers can be cast to and from each other)
+                // - Any primitive with any other primitive
+                let checked_ty = tu.resolve_type(target_ty.inner);
+                println!("Casting to {checked_ty}");
+                let checked_rhs = rhs.type_check_rvalue(tu, tf, None);
+                let kind = TirExprKind::Cast {
+                    target_ty: checked_ty,
+                    expr: Box::new(checked_rhs),
                 };
+                TirExpr::new(kind, checked_ty)
+            }
+            HirExpr::Call { callee, args } => {
+                enum CallKind {
+                    Direct,
+                    Indirect,
+                }
 
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|a| self.check_rvalue_expr(a, None))
-                    .collect();
+                if let HirExpr::Ident(name) = callee.inner {
+                    let Some(info) = lookup_ident(tu, tf, name) else {
+                        die!("Use of undefined variable {name}: {span}")
+                    };
 
-                for (arg, expected_arg_ty) in args.iter().zip(arg_tys.iter()) {
-                    if arg.ty != *expected_arg_ty {
-                        die!(
-                            "Mismatched argument type passed to function. Expected {expected_arg_ty} but got {}: {span}",
-                            arg.ty
-                        )
+                    let symbol = info.symbol;
+
+                    if let Type::Function {
+                        arg_types,
+                        return_type,
+                    } = info.ty.lookup()
+                    {
+                        if arg_types.len() != args.len() {
+                            die!(
+                                "Function expects {} args but got {}: {span}",
+                                arg_types.len(),
+                                args.len()
+                            )
+                        }
+                        let mut checked_args = vec![];
+                        let ty = return_type.clone();
+                        for (arg, expected_arg_type) in args.iter().zip(arg_types.clone().iter()) {
+                            let checked_arg =
+                                arg.type_check_rvalue(tu, tf, Some(*expected_arg_type));
+                            if checked_arg.ty != *expected_arg_type {
+                                die!(
+                                    "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
+                                    checked_arg.ty,
+                                    arg.span
+                                )
+                            }
+                            checked_args.push(checked_arg);
+                        }
+                        let kind = TirExprKind::DirectCall {
+                            callee: symbol,
+                            args: checked_args,
+                        };
+                        return TirExpr::new(kind, ty);
                     }
                 }
-                let ty = *return_ty;
-                let kind = TirExprKind::Call { callee, args };
-                TirExpr::new(kind, ty)
-            }
-            HirExpr::SizeOfTy { ty } => {
-                let ty_size = self.resolve_type(ty).bytes();
-                let kind = TirExprKind::Num(ty_size as i128);
-                let ty = add_type(Type::U64);
-                TirExpr::new(kind, ty)
-            }
-            HirExpr::SizeOfExpr { expr } => {
-                let ty_size = self.check_rvalue_expr(expr, None).ty.bytes();
-                let kind = TirExprKind::Num(ty_size as i128);
-                let ty = add_type(Type::U64);
-                TirExpr::new(kind, ty)
+                let checked_callee = callee.type_check_rvalue(tu, tf, None);
+                match checked_callee.ty.lookup() {
+                    Type::Pointer(f) => {
+                        if let Type::Function {
+                            arg_types,
+                            return_type,
+                        } = f.lookup()
+                        {
+                            let mut checked_args = vec![];
+                            let ty = return_type.clone();
+                            for (arg, expected_arg_type) in
+                                args.iter().zip(arg_types.clone().iter())
+                            {
+                                let checked_arg =
+                                    arg.type_check_rvalue(tu, tf, Some(*expected_arg_type));
+                                if checked_arg.ty != *expected_arg_type {
+                                    die!(
+                                        "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
+                                        checked_arg.ty,
+                                        arg.span
+                                    )
+                                }
+                                checked_args.push(checked_arg);
+                            }
+                            let kind = TirExprKind::IndirectCall {
+                                callee: Box::new(checked_callee),
+                                args: checked_args,
+                            };
+                            return TirExpr::new(kind, ty);
+                        }
+                    }
+                    _ => {}
+                }
+                die!(
+                    "Cannot call type {} as it is not a function or a pointer to a function: {span}",
+                    checked_callee.ty
+                );
             }
         }
-    }
-}
-
-enum BinType {
-    Integral,
-    Pointer,
-    Other,
-}
-
-/// Helper to avoid making calls to `ty.is_pointer()` or `ty.is_integral()`
-fn classify_type(ty: &Type) -> BinType {
-    if ty.is_pointer() {
-        BinType::Pointer
-    } else if ty.is_integral() {
-        BinType::Integral
-    } else {
-        BinType::Other
     }
 }

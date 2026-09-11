@@ -2,7 +2,6 @@
 /// Lowers from STIR to x86 MIR
 ///
 use crate::comment;
-use crate::common::builder::*;
 use crate::stir::builder::IRFunction;
 use crate::target::stir::isa::*;
 use crate::target::x86::Backend;
@@ -103,7 +102,7 @@ impl Backend {
     pub(crate) fn translate(&mut self, stir_function: &mut IRFunction) {
         // Create the function
         let rty = LLType::fromIRType(stir_function.getReturnType());
-        let mut new_function = x86Function::new(stir_function.name(), rty);
+        let mut new_function = x86Function::new(stir_function.name.clone(), rty);
         for argty in stir_function.args.iter() {
             // self.ir_args.push(*argty);
         }
@@ -114,7 +113,7 @@ impl Backend {
 
         // Do a first pass to register all blocks in a map
         let mut block_map = HashMap::new();
-        FunctionBuilder::dfs(stir_function, |stir_builder, curr_id| {
+        stir_function.dfs(|stir_builder, curr_id| {
             let curr = &stir_builder.blocks[&curr_id];
             let new = mcf.newNamedBlock(curr.name);
             block_map.insert(curr_id, new);

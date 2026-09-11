@@ -15,7 +15,6 @@ impl TirExpr {
 
 #[derive(Debug, Clone)]
 pub enum TirExprKind {
-    Void,
     Num(i128),
     Bool(bool),
     Store {
@@ -40,8 +39,12 @@ pub enum TirExprKind {
         target_ty: TypeId,
         expr: Box<TirExpr>,
     },
-    Call {
+    IndirectCall {
         callee: Box<TirExpr>,
+        args: Vec<TirExpr>,
+    },
+    DirectCall {
+        callee: Symbol,
         args: Vec<TirExpr>,
     },
 }

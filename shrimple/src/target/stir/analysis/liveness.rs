@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use bitset::BitSet;
 
 use crate::{
-    common::traits::InstructionTrait,
-    stir::builder::{IRBB, IRFunction},
+    common::InstructionTrait,
+    stir::builder::{IRLabel, IRFunction},
 };
 
 impl IRFunction {
@@ -17,8 +17,8 @@ impl IRFunction {
         let mut exitpoints = self.find_leaf_blocks();
         let mut worklist = vec![];
 
-        let mut LIVE_IN = BTreeMap::<IRBB, BitSet>::new();
-        let mut LIVE_OUT = BTreeMap::<IRBB, BitSet>::new();
+        let mut LIVE_IN = BTreeMap::<IRLabel, BitSet>::new();
+        let mut LIVE_OUT = BTreeMap::<IRLabel, BitSet>::new();
 
         // Insert empty sets for every reachable block
         self.dfs(|self_, curr_id| {
