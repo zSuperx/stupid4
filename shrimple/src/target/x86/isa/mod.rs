@@ -1,3 +1,4 @@
+#[rustfmt::skip]
 mod instr;
 pub(super) use instr::*;
 
