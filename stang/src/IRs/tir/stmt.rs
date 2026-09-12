@@ -1,13 +1,9 @@
-use crate::common::*;
-
 use super::*;
+use crate::common::*;
+use crate::translation_unit::Symbol;
 
 #[derive(Debug, Clone)]
 pub enum TirStmt {
-    Let {
-        lhs: Symbol,
-        rhs: TirExpr,
-    },
     While {
         cond: TirExpr,
         body: Box<TirStmt>,
@@ -23,5 +19,3 @@ pub enum TirStmt {
     Block(Vec<TirStmt>),
     Expr(TirExpr),
 }
-
-

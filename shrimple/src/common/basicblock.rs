@@ -1,7 +1,7 @@
 //! This module defines the [`BasicBlock`] struct, which represents a bundle of instructions
 //! terminated by a control-flow-inducing instruction.
-use std::collections::BTreeSet;
 use crate::common::Label;
+use std::collections::BTreeSet;
 
 use bitset::BitSet;
 
@@ -9,7 +9,7 @@ use super::traits::InstructionTrait;
 
 #[derive(Debug, Clone)]
 pub struct BasicBlock<I: InstructionTrait> {
-    pub name: &'static str,
+    pub label: Label<I>,
     pub successors: BTreeSet<Label<I>>,
     pub predecessors: BTreeSet<Label<I>>,
     pub fallthrough: Option<Label<I>>,
@@ -23,24 +23,9 @@ pub struct BasicBlock<I: InstructionTrait> {
 }
 
 impl<I: InstructionTrait> BasicBlock<I> {
-    pub fn new(name: &'static str) -> Self {
+    pub fn new(label: Label<I>) -> Self {
         Self {
-            name,
-            successors: Default::default(),
-            predecessors: Default::default(),
-            fallthrough: Default::default(),
-            instructions: Default::default(),
-            terminator: Default::default(),
-            live_in: Default::default(),
-            live_out: Default::default(),
-            gen_: Default::default(),
-            kill: Default::default(),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            name: Default::default(),
+            label,
             successors: Default::default(),
             predecessors: Default::default(),
             fallthrough: Default::default(),

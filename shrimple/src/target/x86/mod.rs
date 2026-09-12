@@ -1,8 +1,8 @@
-mod translate;
-mod legalize;
-mod isa;
 mod builder;
+mod isa;
+mod legalize;
+mod translate;
 pub use builder::x86Module as Backend;
-mod opts;
 mod abi;
 mod analysis;
+mod opts;

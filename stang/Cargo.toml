@@ -9,6 +9,6 @@ shrimple = { version = "0.1.0", path = "../shrimple" }
 clap = { version = "4.6.1", features = ["derive"] }
 derived-deref = "2.1.0"
 heuristic-graph-coloring = { path = "../heuristic-graph-coloring/" }
-registry = { path = "../registry/" }
+interner = { path = "../interner/" }
 tempfile = "3.27.0"
 anyhow = "1.0.104"

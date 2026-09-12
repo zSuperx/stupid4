@@ -1,14 +1,16 @@
 use crate::ast::*;
 use crate::common::*;
+use crate::translation_unit::Symbol;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct TirExpr {
     pub kind: TirExprKind,
-    pub ty: TypeId,
+    pub ty: Rc<QualType>,
 }
 
 impl TirExpr {
-    pub fn new(kind: TirExprKind, ty: TypeId) -> Self {
+    pub fn new(kind: TirExprKind, ty: Rc<QualType>) -> Self {
         Self { kind, ty }
     }
 }
@@ -36,7 +38,7 @@ pub enum TirExprKind {
         rhs: Box<TirExpr>,
     },
     Cast {
-        target_ty: TypeId,
+        target_ty: Rc<QualType>,
         expr: Box<TirExpr>,
     },
     IndirectCall {

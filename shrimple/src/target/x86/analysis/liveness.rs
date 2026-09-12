@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use bitset::BitSet;
 
-use crate::{common::InstructionTrait, target::x86::builder::{x86Label, x86Function}};
+use crate::{
+    common::InstructionTrait,
+    target::x86::builder::{x86Function, x86Label},
+};
 
 impl x86Function {
     /// Performs liveness analysis and returns a ???
@@ -61,7 +64,7 @@ impl x86Function {
             }
         }
 
-        self.dfs(|self_, curr_id| {
+        self.dfs_mut(|self_, curr_id| {
             let curr = self_.blocks.get_mut(&curr_id).unwrap();
             curr.live_in = std::mem::take(LIVE_IN.get_mut(&curr_id).unwrap());
             curr.live_out = std::mem::take(LIVE_OUT.get_mut(&curr_id).unwrap());

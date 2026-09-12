@@ -1,14 +1,20 @@
 use crate::ast::*;
 use crate::common::Spanned;
+use crate::common::RcString;
+use std::rc::Rc;
 
 use super::*;
 
 #[derive(Debug, Clone)]
 pub enum HirStmt {
-    Let {
-        lhs: Spanned<&'static str>,
-        ty: Option<Spanned<TypeId>>,
-        rhs: Spanned<HirExpr>,
+    LetDecl {
+        name: Spanned<RcString>,
+        ty: Option<Spanned<Rc<RawType>>>,
+    },
+    LetAssign {
+        name: Spanned<RcString>,
+        ty: Option<Spanned<Rc<RawType>>>,
+        value: Spanned<HirExpr>,
     },
     While {
         cond: Spanned<HirExpr>,

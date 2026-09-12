@@ -1,5 +1,5 @@
 use super::token::Token;
-use crate::common::{Span, Spanned};
+use crate::common::{Span, Spanned, RcString};
 use crate::die;
 use crate::translation_unit::{SOURCE, add_str, source};
 
@@ -61,7 +61,7 @@ impl Lexer {
         self.peek().inner == expected
     }
 
-    pub fn expect_ident(&mut self) -> Spanned<&'static str> {
+    pub fn expect_ident(&mut self) -> Spanned<RcString> {
         let next = self.eat();
         match next.inner {
             Token::Ident(s) => next.span.wrap(s),
@@ -116,11 +116,11 @@ impl Lexer {
             }
         }
 
-        let Ok(raw) = str::from_utf8(&buf) else {
+        let Ok(raw) = String::from_utf8(buf) else {
             die!("Non-utf8 characters are not supported: {}", self.last_span);
         };
 
-        let kind = Token::Int(add_str(raw));
+        let kind = Token::Int(add_str(&raw));
 
         Some(self.make_token(kind, start))
     }
@@ -158,7 +158,7 @@ impl Lexer {
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             "sizeof" => Token::Sizeof,
-            _ => Token::Ident(add_str(raw)),
+            _ => Token::Ident(add_str(&raw.to_string())),
         };
 
         Some(self.make_token(kind, start))
@@ -187,7 +187,7 @@ impl Lexer {
         let Ok(raw) = str::from_utf8(source().get(start + 1..self.cursor - 1)?) else {
             die!("Non-utf8 characters are not supported: {}", self.last_span);
         };
-        let token = Token::Str(add_str(raw));
+        let token = Token::Str(add_str(&raw.to_string()));
 
         Some(self.make_token(token, start))
     }

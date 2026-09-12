@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 #[derive(Debug)]
-pub struct Env<K: Hash + Eq, V: Copy> {
+pub struct Env<K: Hash + Eq, V: Clone> {
     scopes: Vec<HashMap<K, V>>,
 }
 
-impl<K: Hash + Eq, V: Copy> Default for Env<K, V> {
+impl<K: Hash + Eq, V: Clone> Default for Env<K, V> {
     fn default() -> Self {
         Self {
             scopes: vec![HashMap::default()],
@@ -14,9 +14,13 @@ impl<K: Hash + Eq, V: Copy> Default for Env<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V: Copy> Env<K, V> {
+impl<K: Hash + Eq, V: Clone> Env<K, V> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_base(map: HashMap<K, V>) -> Self {
+        Self { scopes: vec![map] }
     }
 
     pub fn insert(&mut self, name: K, val: V) -> Option<V> {
@@ -26,7 +30,7 @@ impl<K: Hash + Eq, V: Copy> Env<K, V> {
     pub fn get(&self, name: &K) -> Option<V> {
         for scope in self.scopes.iter().rev() {
             if let Some(t) = scope.get(name) {
-                return Some(*t);
+                return Some(t.clone());
             }
         }
         None

@@ -4,7 +4,7 @@ use bitset::BitSet;
 
 use crate::{
     common::InstructionTrait,
-    stir::builder::{IRLabel, IRFunction},
+    stir::builder::{IRFunction, IRLabel},
 };
 
 impl IRFunction {
@@ -28,7 +28,7 @@ impl IRFunction {
         });
 
         while let Some(curr_id) = worklist.pop() {
-            let curr = self.blocks.get_mut(&curr_id).unwrap();
+            let curr = self.blocks.get(&curr_id).unwrap();
 
             // LIVE_IN[s] = GEN[s] U (LIVE_OUT[s] - KILL[s])
             let mut live_in = LIVE_OUT[&curr_id].clone();
@@ -68,7 +68,7 @@ impl IRFunction {
             }
         }
 
-        self.dfs(|self_, curr_id| {
+        self.dfs_mut(|self_, curr_id| {
             let curr = self_.blocks.get_mut(&curr_id).unwrap();
             curr.live_in = std::mem::take(LIVE_IN.get_mut(&curr_id).unwrap());
             curr.live_out = std::mem::take(LIVE_OUT.get_mut(&curr_id).unwrap());

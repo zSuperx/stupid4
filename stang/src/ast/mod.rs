@@ -1,5 +1,8 @@
 mod ops;
 pub use ops::*;
 
-mod types;
-pub use types::*;
+mod qual_type;
+pub use qual_type::*;
+
+mod raw_type;
+pub use raw_type::*;

@@ -1,5 +1,5 @@
 use crate::{
-    common::{BasicBlock, FunctionBuilder, ModuleBuilder, Label},
+    common::{BasicBlock, FunctionBuilder, Label, ModuleBuilder},
     stir::isa::{IRValue, VReg},
     target::stir::isa::{IRInstr, IRType},
 };
@@ -16,7 +16,7 @@ impl IRFunction {
         ret
     }
 
-    pub fn print(&mut self, include_comments: bool) {
+    pub fn print(&self, include_comments: bool) {
         println!(
             "{}({}):",
             self.name,

@@ -1,11 +1,13 @@
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+use crate::common::RcString;
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     #[default]
     Eof,
-    Int(&'static str),
+    Int(RcString),
     Bool(bool),
-    Str(&'static str),
-    Ident(&'static str),
+    Str(RcString),
+    Ident(RcString),
 
     // Declarator keywords
     Let,
@@ -30,10 +32,10 @@ pub enum Token {
     RBrack, // ]
 
     // Separators
-    Comma, // ,
-    Dot,   // .
-    Colon, // :
-    Semi,  // ;
+    Comma,  // ,
+    Dot,    // .
+    Colon,  // :
+    Semi,   // ;
     RArrow, // ->
 
     // Operators

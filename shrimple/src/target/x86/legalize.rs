@@ -14,7 +14,7 @@ impl Backend {
             .as_mut()
             .expect("Legalization can only happen after IR translation");
 
-        mcf.dfs(|mcf, curr_id| {
+        mcf.dfs_mut(|mcf, curr_id| {
             // TODO: This makes me feel like a borrow checker outlaw. Fix this shit
             let mut curr = mcf.blocks.remove(&curr_id).unwrap();
             curr.rewrite(|instr| match instr {

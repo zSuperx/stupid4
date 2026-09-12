@@ -1,5 +1,6 @@
 fn main(): i32 {
   if true {
-    return 8;
+    return 69;
   }
+  return 0;
 }

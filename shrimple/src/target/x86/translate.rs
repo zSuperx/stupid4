@@ -99,7 +99,7 @@ impl Backend {
         }
     }
 
-    pub(crate) fn translate(&mut self, stir_function: &mut IRFunction) {
+    pub(crate) fn translate(&mut self, stir_function: &IRFunction) {
         // Create the function
         let rty = LLType::fromIRType(stir_function.getReturnType());
         let mut new_function = x86Function::new(stir_function.name.clone(), rty);
@@ -115,7 +115,7 @@ impl Backend {
         let mut block_map = HashMap::new();
         stir_function.dfs(|stir_builder, curr_id| {
             let curr = &stir_builder.blocks[&curr_id];
-            let new = mcf.newNamedBlock(curr.name);
+            let new = mcf.newNamedBlock(curr.label.name());
             block_map.insert(curr_id, new);
         });
 
@@ -130,7 +130,7 @@ impl Backend {
         mcf.emit(Push(RBP));
         mcf.emit(Mov(RBP, RSP));
         mcf.emit(Jmp(body));
-        mcf.addSuccessors(&[body]);
+        mcf.addSuccessorsToCurrent(&[body]);
         mcf.addFallthrough(body);
 
         // Create epilogue
@@ -153,7 +153,7 @@ impl Backend {
                     IRInstr::Comment(s) => mcf.emit(Comment(s.clone())),
                     IRInstr::Jmp(b) => {
                         let b = block_map[b];
-                        mcf.addSuccessors(&[b]);
+                        mcf.addSuccessorsToCurrent(&[b]);
                         mcf.emit(Jmp(b));
                     }
                     IRInstr::Store(ty, ptr, rs1) => {
@@ -216,7 +216,7 @@ impl Backend {
                     IRInstr::Br(cond, then_bb, else_bb) => {
                         let x86then = block_map[then_bb];
                         let x86else = block_map[else_bb];
-                        mcf.addSuccessors(&[x86then]);
+                        mcf.addSuccessorsToCurrent(&[x86then]);
                         mcf.addFallthrough(x86else);
                         if let Some(phy) = self.v2p.get(cond) {
                             match phy {
@@ -270,7 +270,7 @@ impl Backend {
                         let dst = self.createFrameSlot(mcf, dst, ty);
                     }
                     IRInstr::Retv => {
-                        mcf.addSuccessors(&[epilogue]);
+                        mcf.addSuccessorsToCurrent(&[epilogue]);
                         mcf.emit(Jmp(epilogue));
                     }
                     IRInstr::Ret(ty, rs1) => {
@@ -286,7 +286,7 @@ impl Backend {
                             mcf.emit(Movzx(a, rs1));
                         }
 
-                        mcf.addSuccessors(&[epilogue]);
+                        mcf.addSuccessorsToCurrent(&[epilogue]);
                         mcf.emit(Jmp(epilogue));
                     }
                     IRInstr::Trunc(to_ty, dst, from_ty, rs1) => {

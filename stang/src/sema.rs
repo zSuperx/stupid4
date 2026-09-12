@@ -2,34 +2,34 @@ use crate::IRs::{hir::*, tir::*};
 use crate::ast::*;
 use crate::common::*;
 use crate::translation_unit::{
-    FunctionContext, SymbolInfo, SymbolKind, TranslationUnit, add_type, lookup_ident, lookup_symbol,
+    FunctionContext, SymbolInfo, SymbolKind, TranslationUnit, lookup_ident, lookup_symbol, qtype,
 };
+use std::rc::Rc;
 
 impl HirFunction {
     /// Type checking a HIR Function produces a TIR Function, which holds the necessary context for
     /// code generation
     pub fn type_check(self, tu: &mut TranslationUnit) -> TirFunction {
-        let return_type = tu.resolve_type(self.return_type.inner);
-        let symbol = tu.top_level_scope.get(self.name.inner).copied().unwrap();
+        let return_type = tu.qualify_type(&self.return_type.inner);
+        let symbol = tu.top_level_scope.get(&self.name.inner).cloned().unwrap();
 
         let mut tf = TirFunction {
             name: self.name,
             symbol,
             return_type,
-            env: Default::default(),
+            env: Env::with_base(tu.top_level_scope.clone()),
             loop_labels: Default::default(),
             loop_depth: Default::default(),
             symbol_table: Default::default(),
             symbol_counter: Default::default(),
             body: Default::default(),
         };
-        tf.env.push_filled_scope(tu.top_level_scope.clone());
 
         let mut args = vec![];
         for (i, (raw_arg_name, raw_arg_type)) in self.args.into_iter().enumerate() {
             let arg_symbol = tf.add_local_symbol(
                 raw_arg_name,
-                tu.resolve_type(raw_arg_type.inner),
+                tu.qualify_type(&raw_arg_type.inner),
                 SymbolKind::Arg(i),
             );
             args.push(arg_symbol)
@@ -46,31 +46,49 @@ impl Spanned<HirStmt> {
     pub fn type_check(&self, tu: &mut TranslationUnit, tf: &mut TirFunction) -> TirStmt {
         let span = self.span;
         match &self.inner {
-            HirStmt::Let { lhs, ty, rhs } => {
-                let desired_type = ty.map(|t| tu.resolve_type(t.inner));
-                let checked_rhs = rhs.type_check_rvalue(tu, tf, desired_type);
+            HirStmt::LetDecl { name, ty } => {
+                let Some(user_ty) = ty else {
+                    die!("Uninitialized variables must be declared with a type {span}");
+                };
+                let qty = tu.qualify_type(&user_ty.inner);
+                let symbol = tf.add_local_symbol(name.clone(), qty, SymbolKind::Local);
+                // TODO: add a no-op or empty stmt
+                TirStmt::Block(vec![])
+            }
+            HirStmt::LetAssign {
+                name: lhs,
+                ty,
+                value,
+            } => {
+                let desired_type = ty.as_ref().map(|t| tu.qualify_type(&t.inner));
+                let checked_val = value.type_check_rvalue(tu, tf, desired_type.clone());
                 if let Some(lhs_ty) = desired_type
-                    && lhs_ty != checked_rhs.ty
+                    && lhs_ty != checked_val.ty
                 {
-                    die!("Expected type {lhs_ty} but got {}: {span}", checked_rhs.ty);
+                    die!("Expected type {lhs_ty} but got {}: {span}", checked_val.ty);
                 }
 
-                let rhs_ty = if let Type::Function { .. } = checked_rhs.ty.lookup() {
-                    add_type(Type::Pointer(checked_rhs.ty))
+                let rhs_ty = if let QualType::Function { .. } = checked_val.ty.as_ref() {
+                    qtype(&QualType::Pointer(checked_val.ty.clone()))
                 } else {
-                    checked_rhs.ty
+                    checked_val.ty.clone()
                 };
-                let symbol = tf.add_local_symbol(*lhs, rhs_ty, SymbolKind::Local);
-                TirStmt::Let {
-                    lhs: symbol,
-                    rhs: checked_rhs,
-                }
+                let symbol = tf.add_local_symbol(lhs.clone(), rhs_ty.clone(), SymbolKind::Local);
+                let expr = {
+                    let ty = rhs_ty.clone();
+                    let kind = TirExprKind::Store {
+                        ptr: Box::new(lookup_symbol(tu, tf, symbol).create_addr_of()),
+                        val: Box::new(checked_val),
+                    };
+                    TirExpr::new(kind, ty)
+                };
+                TirStmt::Expr(expr)
             }
             HirStmt::While { cond, body } => {
-                let hint = add_type(Type::Bool);
+                let hint = qtype(&QualType::Bool);
                 let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
-                let cond_ty = checked_cond.ty;
-                if *cond_ty != Type::Bool {
+                let cond_ty = checked_cond.ty.clone();
+                if *cond_ty != QualType::Bool {
                     die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
 
@@ -98,10 +116,10 @@ impl Spanned<HirStmt> {
                 TirStmt::Break
             }
             HirStmt::If { cond, then_, else_ } => {
-                let hint = add_type(Type::Bool);
+                let hint = qtype(&QualType::Bool);
                 let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
-                let cond_ty = checked_cond.ty;
-                if *cond_ty != Type::Bool {
+                let cond_ty = checked_cond.ty.clone();
+                if *cond_ty != QualType::Bool {
                     die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
                 let checked_then = Box::new(then_.type_check(tu, tf));
@@ -114,7 +132,7 @@ impl Spanned<HirStmt> {
             }
             HirStmt::Return(expr) => {
                 let ret_val = if let Some(expr) = expr {
-                    let checked_expr = expr.type_check_rvalue(tu, tf, Some(tf.return_type));
+                    let checked_expr = expr.type_check_rvalue(tu, tf, Some(tf.return_type.clone()));
                     if checked_expr.ty != tf.return_type {
                         die!(
                             "Function {} expected return type {}, but got {}: {span}",
@@ -125,7 +143,7 @@ impl Spanned<HirStmt> {
                     }
                     Some(checked_expr)
                 } else {
-                    if *tf.return_type != Type::Void {
+                    if *tf.return_type != QualType::Void {
                         die!(
                             "Function {} expected return type {}, but got void: {span}",
                             tf.name,
@@ -149,7 +167,7 @@ impl Spanned<HirExpr> {
         &self,
         tu: &mut TranslationUnit,
         tf: &mut TirFunction,
-        hint: Option<TypeId>,
+        hint: Option<Rc<QualType>>,
     ) -> TirExpr {
         let span = self.span;
         match &self.inner {
@@ -157,14 +175,14 @@ impl Spanned<HirExpr> {
                 let Some(symbol) = tf.env.get(&i) else {
                     die!("Use of undefined variable: {span}")
                 };
-                let kind = TirExprKind::AddrOf(symbol);
-                let inner_ty = lookup_symbol(tu, tf, symbol).ty;
-                let ty = add_type(Type::Pointer(inner_ty));
+                let kind = TirExprKind::AddrOf(symbol.clone());
+                let inner_ty = lookup_symbol(tu, tf, symbol).ty.clone();
+                let ty = qtype(&QualType::Pointer(inner_ty));
                 TirExpr::new(kind, ty)
             }
             HirExpr::Index { base, index } => {
                 let checked_base = base.type_check_rvalue(tu, tf, hint);
-                let checked_index = index.type_check_rvalue(tu, tf, Some(add_type(Type::U64)));
+                let checked_index = index.type_check_rvalue(tu, tf, Some(qtype(&QualType::U64)));
                 if !checked_base.ty.is_pointer() {
                     die!(
                         "Can't index into non-pointer type {}: {base}",
@@ -179,7 +197,7 @@ impl Spanned<HirExpr> {
                     )
                 }
 
-                let ty = checked_base.ty;
+                let ty = checked_base.ty.clone();
                 let kind = TirExprKind::Bin {
                     op: BinOp::PtrAdd,
                     lhs: Box::new(checked_base),
@@ -203,7 +221,7 @@ impl Spanned<HirExpr> {
         &self,
         tu: &mut TranslationUnit,
         tf: &mut TirFunction,
-        hint: Option<TypeId>,
+        hint: Option<Rc<QualType>>,
     ) -> TirExpr {
         let span = self.span;
         match &self.inner {
@@ -214,21 +232,21 @@ impl Spanned<HirExpr> {
                         if hint_id.is_integral() || hint_id.is_pointer() {
                             hint_id
                         } else {
-                            add_type(Type::I32)
+                            qtype(&QualType::I32)
                         }
                     }
-                    None => add_type(Type::I32),
+                    None => qtype(&QualType::I32),
                 };
-                let result = match ty.lookup() {
-                    Type::I8 => int_str.parse::<i8>().map(|i| i as i128),
-                    Type::U8 => int_str.parse::<u8>().map(|i| i as i128),
-                    Type::I16 => int_str.parse::<i16>().map(|i| i as i128),
-                    Type::U16 => int_str.parse::<u16>().map(|i| i as i128),
-                    Type::I32 => int_str.parse::<i32>().map(|i| i as i128),
-                    Type::U32 => int_str.parse::<u32>().map(|i| i as i128),
-                    Type::I64 => int_str.parse::<i64>().map(|i| i as i128),
-                    Type::U64 => int_str.parse::<u64>().map(|i| i as i128),
-                    Type::Pointer(..) if int_str.parse::<i32>().is_ok_and(|x| x == 0) => Ok(0),
+                let result = match ty.as_ref() {
+                    QualType::I8 => int_str.parse::<i8>().map(|i| i as i128),
+                    QualType::U8 => int_str.parse::<u8>().map(|i| i as i128),
+                    QualType::I16 => int_str.parse::<i16>().map(|i| i as i128),
+                    QualType::U16 => int_str.parse::<u16>().map(|i| i as i128),
+                    QualType::I32 => int_str.parse::<i32>().map(|i| i as i128),
+                    QualType::U32 => int_str.parse::<u32>().map(|i| i as i128),
+                    QualType::I64 => int_str.parse::<i64>().map(|i| i as i128),
+                    QualType::U64 => int_str.parse::<u64>().map(|i| i as i128),
+                    QualType::Pointer(..) if int_str.parse::<i32>().is_ok_and(|x| x == 0) => Ok(0),
                     _ => {
                         die!("`{int_str}` could not be parsed as a {ty}");
                     }
@@ -240,7 +258,7 @@ impl Spanned<HirExpr> {
                 TirExpr::new(kind, ty)
             }
             HirExpr::Bool(b) => {
-                let ty = add_type(Type::Bool);
+                let ty = qtype(&QualType::Bool);
                 let kind = TirExprKind::Bool(*b);
                 TirExpr::new(kind, ty)
             }
@@ -249,15 +267,15 @@ impl Spanned<HirExpr> {
                     die!("Use of undefined variable {i}: {span}")
                 };
 
-                match info.ty.lookup() {
-                    Type::Function { .. } => {
-                        let kind = TirExprKind::AddrOf(info.symbol);
-                        let ty = add_type(Type::Pointer(info.ty));
+                match info.ty.as_ref() {
+                    QualType::Function { .. } => {
+                        let kind = TirExprKind::AddrOf(info.symbol.clone());
+                        let ty = qtype(&QualType::Pointer(info.ty.clone()));
                         TirExpr::new(kind, ty)
                     }
                     _ => {
-                        let kind = TirExprKind::ValueOf(info.symbol);
-                        TirExpr::new(kind, info.ty)
+                        let kind = TirExprKind::ValueOf(info.symbol.clone());
+                        TirExpr::new(kind, info.ty.clone())
                     }
                 }
             }
@@ -265,14 +283,14 @@ impl Spanned<HirExpr> {
                 // This should become a Store?
                 // Check the LHS as an LVALUE. It must be a storage location
                 let checked_lhs = lhs.type_check_lvalue(tu, tf, None);
-                let lhs_ty = checked_lhs.ty.get_pointee();
+                let lhs_ty = checked_lhs.ty.get_pointee().clone();
 
                 // RHS can be anything
-                let checked_rhs = rhs.type_check_rvalue(tu, tf, Some(lhs_ty));
-                let rhs_ty = if let Type::Function { .. } = checked_rhs.ty.lookup() {
-                    add_type(Type::Pointer(checked_rhs.ty))
+                let checked_rhs = rhs.type_check_rvalue(tu, tf, Some(lhs_ty.clone()));
+                let rhs_ty = if let QualType::Function { .. } = checked_rhs.ty.as_ref() {
+                    qtype(&QualType::Pointer(checked_rhs.ty.clone()))
                 } else {
-                    checked_rhs.ty
+                    checked_rhs.ty.clone()
                 };
 
                 // Since LHS is a storage location, it's technically a pointer
@@ -282,7 +300,7 @@ impl Spanned<HirExpr> {
                 }
 
                 // x = y = z should be possible
-                let ty = checked_rhs.ty;
+                let ty = checked_rhs.ty.clone();
                 let kind = TirExprKind::Store {
                     ptr: Box::new(checked_lhs),
                     val: Box::new(checked_rhs),
@@ -291,14 +309,15 @@ impl Spanned<HirExpr> {
             }
             HirExpr::AddrOf { inner } => inner.type_check_lvalue(tu, tf, None),
             HirExpr::SizeOfTy { ty } => {
-                let kind = TirExprKind::Num(ty.inner.bytes() as i128);
-                let ty = add_type(Type::U64);
+                let qt = tu.qualify_type(&ty.inner);
+                let kind = TirExprKind::Num(qt.bytes() as i128);
+                let ty = qtype(&QualType::U64);
                 TirExpr::new(kind, ty)
             }
             HirExpr::SizeOfExpr { expr } => {
                 let kind =
                     TirExprKind::Num(expr.type_check_rvalue(tu, tf, None).ty.bytes() as i128);
-                let ty = add_type(Type::U64);
+                let ty = qtype(&QualType::U64);
                 TirExpr::new(kind, ty)
             }
             HirExpr::Deref { inner } => {
@@ -315,12 +334,12 @@ impl Spanned<HirExpr> {
                 if !base.ty.is_pointer() {
                     die!("Cannot index into non-pointer type {}: {span}", base.ty);
                 }
-                let hint = add_type(Type::U64);
+                let hint = qtype(&QualType::U64);
                 let index = index.type_check_rvalue(tu, tf, Some(hint));
                 let ty = base.ty.get_pointee();
 
                 let inner = {
-                    let ty = base.ty;
+                    let ty = base.ty.clone();
                     let kind = TirExprKind::Bin {
                         op: BinOp::PtrAdd,
                         lhs: Box::new(base),
@@ -337,10 +356,10 @@ impl Spanned<HirExpr> {
             HirExpr::Field { base, field } => todo!(),
             HirExpr::Un { op, rhs } => {
                 let checked_rhs = rhs.type_check_rvalue(tu, tf, hint);
-                let rhs_ty = checked_rhs.ty;
+                let rhs_ty = checked_rhs.ty.clone();
                 let ty = match op {
                     UnOp::Not => {
-                        if *rhs_ty != Type::Bool {
+                        if *rhs_ty != QualType::Bool {
                             die!("Cannot logically not a {rhs_ty}: {span}")
                         }
                         rhs_ty
@@ -366,7 +385,7 @@ impl Spanned<HirExpr> {
                 }
 
                 /// Helper to avoid making calls to `ty.is_pointer()` or `ty.is_integral()`
-                fn classify_type(ty: &Type) -> BinType {
+                fn classify_type(ty: &QualType) -> BinType {
                     if ty.is_pointer() {
                         BinType::Pointer
                     } else if ty.is_integral() {
@@ -377,36 +396,42 @@ impl Spanned<HirExpr> {
                 }
 
                 let lhs = lhs.type_check_rvalue(tu, tf, hint);
-                let lhs_class = classify_type(lhs.ty.lookup());
-                let rhs = rhs.type_check_rvalue(tu, tf, Some(lhs.ty));
-                let rhs_class = classify_type(rhs.ty.lookup());
+                let lhs_class = classify_type(lhs.ty.as_ref());
+                let rhs = rhs.type_check_rvalue(tu, tf, Some(lhs.ty.clone()));
+                let rhs_class = classify_type(rhs.ty.as_ref());
 
                 let (op, ty) = match (lhs_class, op, rhs_class) {
                     // ptr - ptr = int
                     (BinType::Pointer, BinOp::Sub, BinType::Pointer) if lhs.ty == rhs.ty => {
-                        (BinOp::Sub, lhs.ty)
+                        (BinOp::Sub, lhs.ty.clone())
                     }
                     // ptr + int = ptr
-                    (BinType::Pointer, BinOp::Add, BinType::Integral) => (BinOp::PtrAdd, lhs.ty),
+                    (BinType::Pointer, BinOp::Add, BinType::Integral) => {
+                        (BinOp::PtrAdd, lhs.ty.clone())
+                    }
                     // ptr - int = ptr
-                    (BinType::Pointer, BinOp::Sub, BinType::Integral) => (BinOp::PtrSub, lhs.ty),
+                    (BinType::Pointer, BinOp::Sub, BinType::Integral) => {
+                        (BinOp::PtrSub, lhs.ty.clone())
+                    }
                     // int + ptr = ptr
-                    (BinType::Integral, BinOp::Add, BinType::Pointer) => (BinOp::PtrAdd, rhs.ty),
+                    (BinType::Integral, BinOp::Add, BinType::Pointer) => {
+                        (BinOp::PtrAdd, rhs.ty.clone())
+                    }
                     // int +,-,/,* int = int
                     (BinType::Integral, op, BinType::Integral)
                         if lhs.ty == rhs.ty && op.is_arithmetic() =>
                     {
-                        (*op, lhs.ty)
+                        (*op, lhs.ty.clone())
                     }
                     // int >,>=,<,<= int = bool, ptr >,>=,<,<= ptr = bool
                     (
                         BinType::Integral | BinType::Pointer,
                         op,
                         BinType::Integral | BinType::Pointer,
-                    ) if lhs.ty == rhs.ty && op.is_ordered() => (*op, add_type(Type::Bool)),
+                    ) if lhs.ty == rhs.ty && op.is_ordered() => (*op, qtype(&QualType::Bool)),
                     // any == any = bool, any != any = bool
                     (_, BinOp::Eq | BinOp::Ne, _) if lhs.ty == rhs.ty => {
-                        (*op, add_type(Type::Bool))
+                        (*op, qtype(&QualType::Bool))
                     }
                     _ => die!(
                         "Unsupported operation `{op}` between {} and {}",
@@ -426,11 +451,11 @@ impl Spanned<HirExpr> {
                 // Casting should be valid between:
                 // - Same sized types (this means all pointers can be cast to and from each other)
                 // - Any primitive with any other primitive
-                let checked_ty = tu.resolve_type(target_ty.inner);
+                let checked_ty = tu.qualify_type(&target_ty.inner);
                 println!("Casting to {checked_ty}");
                 let checked_rhs = rhs.type_check_rvalue(tu, tf, None);
                 let kind = TirExprKind::Cast {
-                    target_ty: checked_ty,
+                    target_ty: checked_ty.clone(),
                     expr: Box::new(checked_rhs),
                 };
                 TirExpr::new(kind, checked_ty)
@@ -441,17 +466,17 @@ impl Spanned<HirExpr> {
                     Indirect,
                 }
 
-                if let HirExpr::Ident(name) = callee.inner {
-                    let Some(info) = lookup_ident(tu, tf, name) else {
+                if let HirExpr::Ident(name) = callee.inner.clone() {
+                    let Some(info) = lookup_ident(tu, tf, &name) else {
                         die!("Use of undefined variable {name}: {span}")
                     };
 
-                    let symbol = info.symbol;
+                    let symbol = info.symbol.clone();
 
-                    if let Type::Function {
+                    if let QualType::Function {
                         arg_types,
                         return_type,
-                    } = info.ty.lookup()
+                    } = info.ty.as_ref()
                     {
                         if arg_types.len() != args.len() {
                             die!(
@@ -464,7 +489,7 @@ impl Spanned<HirExpr> {
                         let ty = return_type.clone();
                         for (arg, expected_arg_type) in args.iter().zip(arg_types.clone().iter()) {
                             let checked_arg =
-                                arg.type_check_rvalue(tu, tf, Some(*expected_arg_type));
+                                arg.type_check_rvalue(tu, tf, Some(expected_arg_type.clone()));
                             if checked_arg.ty != *expected_arg_type {
                                 die!(
                                     "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
@@ -482,12 +507,12 @@ impl Spanned<HirExpr> {
                     }
                 }
                 let checked_callee = callee.type_check_rvalue(tu, tf, None);
-                match checked_callee.ty.lookup() {
-                    Type::Pointer(f) => {
-                        if let Type::Function {
+                match checked_callee.ty.as_ref() {
+                    QualType::Pointer(f) => {
+                        if let QualType::Function {
                             arg_types,
                             return_type,
-                        } = f.lookup()
+                        } = f.as_ref()
                         {
                             let mut checked_args = vec![];
                             let ty = return_type.clone();
@@ -495,7 +520,7 @@ impl Spanned<HirExpr> {
                                 args.iter().zip(arg_types.clone().iter())
                             {
                                 let checked_arg =
-                                    arg.type_check_rvalue(tu, tf, Some(*expected_arg_type));
+                                    arg.type_check_rvalue(tu, tf, Some(expected_arg_type.clone()));
                                 if checked_arg.ty != *expected_arg_type {
                                     die!(
                                         "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",

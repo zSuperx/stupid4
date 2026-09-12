@@ -1,6 +1,6 @@
 pub mod isa;
 
-mod opts;
 mod analysis;
+mod opts;
 
 pub mod builder;

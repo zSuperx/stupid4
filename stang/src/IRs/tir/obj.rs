@@ -1,20 +1,19 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::*;
 use crate::ast::*;
 use crate::common::*;
-use crate::translation_unit::LoopLabels;
-use crate::translation_unit::SymbolInfo;
-use crate::translation_unit::SymbolKind;
-use crate::translation_unit::global_state;
-use crate::translation_unit::next_symbol;
+use crate::translation_unit::{
+    LoopLabels, Symbol, SymbolInfo, SymbolKind, global_state, next_symbol,
+};
 
 #[derive(Debug, Clone)]
 pub enum TirObj {
     Fn {
         symbol: Symbol,
-        returns: TypeId,
-        args: Vec<(Symbol, TypeId)>,
+        returns: Rc<QualType>,
+        args: Vec<(Symbol, Rc<QualType>)>,
         body: Box<TirStmt>,
     },
     Global {
@@ -23,21 +22,21 @@ pub enum TirObj {
     },
     Struct {
         name: Symbol,
-        fields: Vec<(Symbol, TypeId)>,
+        fields: Vec<(Symbol, Rc<QualType>)>,
     },
 }
 
 #[derive(Debug)]
 pub struct TirFunction {
-    pub name: Spanned<&'static str>,
+    pub name: Spanned<RcString>,
 
     pub symbol: Symbol,
 
-    pub return_type: TypeId,
+    pub return_type: Rc<QualType>,
 
     /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
     /// most (current) scope, going up in scopes on failure
-    pub env: Env<&'static str, Symbol>,
+    pub env: Env<RcString, Symbol>,
 
     /// Used to codegen continue/break
     pub loop_labels: Vec<LoopLabels>,
@@ -55,16 +54,16 @@ pub struct TirFunction {
 impl TirFunction {
     pub fn add_local_symbol(
         &mut self,
-        name: Spanned<&'static str>,
-        ty: TypeId,
+        name: Spanned<RcString>,
+        ty: Rc<QualType>,
         kind: SymbolKind,
     ) -> Symbol {
-        let symbol = next_symbol(name.inner);
-        self.env.insert(name.inner, symbol);
+        let symbol = next_symbol(&name.inner);
+        self.env.insert(name.inner.clone(), symbol.clone());
         self.symbol_table.insert(
-            symbol,
+            symbol.clone(),
             SymbolInfo {
-                symbol,
+                symbol: symbol.clone(),
                 raw_name: name,
                 ty,
                 kind,

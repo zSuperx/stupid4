@@ -1,12 +1,13 @@
 use crate::ast::*;
-use crate::common::Spanned;
+use crate::common::{Spanned, RcString};
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum HirExpr {
     Void,
-    Num(&'static str),
+    Num(RcString),
     Bool(bool),
-    Ident(&'static str),
+    Ident(RcString),
     Assign {
         lhs: Box<Spanned<HirExpr>>,
         rhs: Box<Spanned<HirExpr>>,
@@ -15,7 +16,7 @@ pub enum HirExpr {
         inner: Box<Spanned<HirExpr>>,
     },
     SizeOfTy {
-        ty: Spanned<TypeId>,
+        ty: Spanned<Rc<RawType>>,
     },
     SizeOfExpr {
         expr: Box<Spanned<HirExpr>>,
@@ -29,7 +30,7 @@ pub enum HirExpr {
     },
     Field {
         base: Box<Spanned<HirExpr>>,
-        field: &'static str,
+        field: RcString,
     },
     Un {
         op: UnOp,
@@ -41,7 +42,7 @@ pub enum HirExpr {
         rhs: Box<Spanned<HirExpr>>,
     },
     Cast {
-        target_ty: Spanned<TypeId>,
+        target_ty: Spanned<Rc<RawType>>,
         rhs: Box<Spanned<HirExpr>>,
     },
     Call {

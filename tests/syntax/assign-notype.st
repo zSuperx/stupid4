@@ -1,3 +1,3 @@
 fn main() {
-  return;
+  let x = 5;
 }

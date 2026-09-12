@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, OnceLock};
 
 use crate::IRs::hir::{HirFunction, HirObj};
-use crate::IRs::tir::{TirFunction, TirStmt};
+use crate::IRs::tir::{TirExpr, TirExprKind, TirFunction, TirStmt};
 use crate::common::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use registry::Registry;
+use interner::Pool;
 use shrimple::stir::builder::IRLabel;
 use shrimple::stir::isa::IRValue;
 
@@ -15,28 +15,27 @@ use crate::ast::*;
 
 #[derive(Default)]
 pub struct GlobalState {
-    pub type_names: HashMap<&'static str, TypeId>,
+    pub type_names: HashMap<RcString, Rc<QualType>>,
 
-    /// Uniquely ID'd resolved types.
-    pub types: Rc<RefCell<Registry<Type>>>,
+    pub qualified_types: Pool<QualType>,
+    pub raw_types: Pool<RawType>,
 
-    /// Uniquely ID'd scoped identifiers
-    pub symbols: Rc<RefCell<Registry<String>>>,
+    pub symbols: Pool<String>,
 
     pub symbol_counter: usize,
 }
 
 #[derive(Debug)]
 pub struct FunctionContext {
-    pub name: Spanned<&'static str>,
+    pub name: Spanned<RcString>,
 
     pub symbol: Symbol,
 
-    pub return_type: TypeId,
+    pub return_type: Rc<QualType>,
 
     /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
     /// most (current) scope, going up in scopes on failure
-    pub env: Env<&'static str, Symbol>,
+    pub env: Env<RcString, Symbol>,
 
     /// Used to codegen continue/break
     pub loop_labels: Vec<LoopLabels>,
@@ -54,7 +53,7 @@ pub struct TranslationUnit {
     /// Global string to symbol map
     ///
     /// Contains names of functions and global variables
-    pub top_level_scope: HashMap<&'static str, Symbol>,
+    pub top_level_scope: HashMap<RcString, Symbol>,
 
     pub global_symbol_table: HashMap<Symbol, SymbolInfo>,
 
@@ -62,21 +61,25 @@ pub struct TranslationUnit {
     symbol_counter: usize,
 }
 
-pub fn next_symbol(name: &'static str) -> Symbol {
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Debug)]
+pub struct Symbol(Rc<String>, usize);
+
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}.{}", self.0, self.1))
+    }
+}
+
+pub fn next_symbol(name: &str) -> Symbol {
+    let s = add_str(&name.to_string());
     let state = global_state();
-    state.symbols.borrow_mut().add(format!("{name}.{}", {
-        state.symbol_counter += 1;
-        state.symbol_counter - 1
-    }))
+    state.symbol_counter += 1;
+    Symbol(s, state.symbol_counter - 1)
 }
 
 impl TranslationUnit {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn add_function(&mut self) {
-        todo!()
     }
 
     // pub fn lookup_symbol(&mut self, symbol: Symbol) -> &SymbolInfo {
@@ -102,20 +105,28 @@ impl TranslationUnit {
     }
 
     /// Resolves a Type::Unresolved(..) into a Type
-    pub fn resolve_type(&mut self, ty: TypeId) -> TypeId {
-        match ty.lookup() {
-            Type::Unresolved(name) => {
-                let Some(id) = global_state().type_names.get(name) else {
+    pub fn qualify_type(&mut self, ty: &RawType) -> Rc<QualType> {
+        match ty {
+            RawType::Base(name) => {
+                let Some(qtype) = global_state().type_names.get(name) else {
                     die!("Unknown type {ty}")
                 };
-                *id
+                qtype.clone()
             }
-            Type::Function { .. } => todo!(),
-            Type::Pointer(id) => {
-                let inner_ty = self.resolve_type(*id);
-                add_type(Type::Pointer(inner_ty))
+            RawType::Pointer(inner) => {
+                let inner_ty = self.qualify_type(inner);
+                qtype(&QualType::Pointer(inner_ty))
             }
-            _ => ty,
+            RawType::Function {
+                arg_types,
+                return_type,
+            } => {
+                let ty = QualType::Function {
+                    arg_types: arg_types.iter().map(|t| self.qualify_type(t)).collect(),
+                    return_type: self.qualify_type(return_type),
+                };
+                qtype(&ty)
+            }
         }
     }
 
@@ -126,14 +137,14 @@ impl TranslationUnit {
             HirObj::Fn(..) => {}
             HirObj::Global { .. } => {}
             HirObj::Struct { name, fields } => {
-                let s = add_type(Type::Base {
-                    name: name.inner,
+                let s = qtype(&QualType::Struct {
+                    name: name.inner.clone(),
                     fields: fields
                         .iter()
-                        .map(|(n, t)| (n.inner, self.resolve_type(t.inner)))
+                        .map(|(n, t)| (n.inner.clone(), self.qualify_type(&t.inner)))
                         .collect(),
                 });
-                global_state().type_names.insert(name.inner, s);
+                global_state().type_names.insert(name.inner.clone(), s);
             }
         }
     }
@@ -150,22 +161,23 @@ impl TranslationUnit {
             }) => {
                 let mut arg_types = vec![];
                 for (_, ty) in args.iter() {
-                    let resolved_ty = self.resolve_type(ty.inner);
+                    let resolved_ty = self.qualify_type(&ty.inner);
                     arg_types.push(resolved_ty);
                 }
-                let return_ty = self.resolve_type(returns.inner);
-                let function_ty = Type::Function {
+                let return_ty = self.qualify_type(&returns.inner);
+                let function_ty = QualType::Function {
                     arg_types,
                     return_type: return_ty,
                 };
-                let ty = add_type(function_ty);
-                let symbol = next_symbol(name.inner);
-                self.top_level_scope.insert(name.inner, symbol);
+                let ty = qtype(&function_ty);
+                let symbol = next_symbol(&name.inner);
+                self.top_level_scope
+                    .insert(name.inner.clone(), symbol.clone());
                 self.global_symbol_table.insert(
-                    symbol,
+                    symbol.clone(),
                     SymbolInfo {
                         symbol,
-                        raw_name: *name,
+                        raw_name: name.clone(),
                         ty,
                         kind: SymbolKind::Function,
                         address_taken: false,
@@ -183,7 +195,7 @@ impl TranslationUnit {
 
 pub static mut GLOBAL_STATE: LazyLock<GlobalState> = LazyLock::new(GlobalState::new);
 pub static SOURCE: OnceLock<Vec<u8>> = OnceLock::new();
-pub static mut STRINGS: LazyLock<HashSet<String>> = LazyLock::new(HashSet::new);
+pub static mut STRINGS: LazyLock<Pool<String>> = LazyLock::new(Pool::new);
 
 pub fn source() -> &'static Vec<u8> {
     SOURCE.get().unwrap()
@@ -193,47 +205,28 @@ pub fn global_state() -> &'static mut GlobalState {
     unsafe { &mut GLOBAL_STATE }
 }
 
-pub fn add_str(value: &str) -> &'static str {
-    unsafe {
-        if let Some(s) = STRINGS.get(value) {
-            s
-        } else {
-            STRINGS.insert(value.to_string());
-            STRINGS.get(value).unwrap()
-        }
-    }
+pub fn add_str<T: AsRef<str>>(value: T) -> Rc<String> {
+    unsafe { STRINGS.get(&value.as_ref().to_string()) }
 }
 
-pub fn add_type(ty: Type) -> TypeId {
-    global_state().types.borrow_mut().add(ty)
+pub fn rtype(ty: &RawType) -> Rc<RawType> {
+    global_state().raw_types.get(ty)
+}
+
+pub fn qtype(ty: &QualType) -> Rc<QualType> {
+    global_state().qualified_types.get(ty)
 }
 
 impl GlobalState {
     pub fn new() -> Self {
-        let mut s = Self::default();
-
-        #[rustfmt::skip]
-        let builtin_types = [
-            Type::I8,   Type::U8,
-            Type::I16,  Type::U16,
-            Type::I32,  Type::U32,
-            Type::I64,  Type::U64,
-            Type::Bool, Type::Void
-        ];
-
-        for ty in builtin_types {
-            let ty_str = ty.to_string().leak();
-            let id = s.types.borrow_mut().add(ty);
-            s.type_names.insert(ty_str, id);
-        }
-        s
+        Self::default()
     }
 }
 
 pub fn lookup_ident<'a, 'b, 'c>(
     tu: &'a mut TranslationUnit,
     tf: &'b mut TirFunction,
-    ident: &'static str,
+    ident: &RcString,
 ) -> Option<&'c SymbolInfo>
 where
     'a: 'c,
@@ -256,11 +249,10 @@ where
 {
     match tf.symbol_table.get(&symbol) {
         Some(i) => i,
-        None => {
-            tu.global_symbol_table
-                .get(&symbol)
-                .expect("Could not find symbol: {symbol}")
-        }
+        None => tu
+            .global_symbol_table
+            .get(&symbol)
+            .expect("Could not find symbol: {symbol}"),
     }
 }
 
@@ -282,9 +274,22 @@ pub enum SymbolKind {
 #[derive(Debug, Clone)]
 pub struct SymbolInfo {
     pub symbol: Symbol,
-    pub raw_name: Spanned<&'static str>,
-    pub ty: TypeId,
+    pub raw_name: Spanned<RcString>,
+    pub ty: Rc<QualType>,
     pub kind: SymbolKind,
+
+    /// Indicates whether the user captured the address of this variable using the & operator
+    /// This is used to prevent PHI promotion, and leaves the associated stack slot as a memory
+    /// location
     pub address_taken: bool,
+
     pub value: Option<IRValue>,
+}
+
+impl SymbolInfo {
+    pub fn create_addr_of(&self) -> TirExpr {
+        let ty = self.ty.clone();
+        let kind = TirExprKind::AddrOf(self.symbol.clone());
+        TirExpr::new(kind, ty)
+    }
 }

@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-registry = { path = "../registry", version = "0.1.0" }
+interner = { path = "../interner", version = "0.1.0" }
 bitset = { path = "../bitset", version = "0.1.0" }
 smallvec = "1.16.0"

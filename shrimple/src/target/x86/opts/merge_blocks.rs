@@ -1,6 +1,4 @@
-use crate::{
-    target::x86::{Backend, isa::x86Instr},
-};
+use crate::target::x86::{Backend, isa::x86Instr};
 
 use x86Instr::*;
 
@@ -13,7 +11,7 @@ impl Backend {
             .as_mut()
             .expect("Block merging can only happen after IR translation");
 
-        mcf.dfs(|mcf, curr_id| {
+        mcf.dfs_mut(|mcf, curr_id| {
             // We loop each block to keep folding in children
             loop {
                 let curr = mcf.blocks.get(&curr_id).unwrap();
@@ -33,7 +31,8 @@ impl Backend {
                     // curr inherits the rest of target's instructions, successors, fallthrough, and terminator
                     let curr = mcf.blocks.get_mut(&curr_id).unwrap();
                     curr.successors = target.successors;
-                    curr.instructions.push(Comment(format!("\r; BB: {target_id}")));
+                    curr.instructions
+                        .push(Comment(format!("\r; BB: {target_id}")));
                     curr.instructions.append(&mut target.instructions);
                     curr.terminator = target.terminator;
                     curr.fallthrough = target.fallthrough;

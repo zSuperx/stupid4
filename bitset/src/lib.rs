@@ -182,7 +182,11 @@ impl std::fmt::Debug for BitSet {
 
 impl std::fmt::Display for BitSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = self.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+        let s = self
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         f.write_fmt(format_args!("{{{s}}}"))
     }
 }

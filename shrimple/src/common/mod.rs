@@ -1,9 +1,11 @@
 mod basicblock;
-mod builder;
+mod function;
 mod label;
+mod module;
 mod traits;
 
 pub use basicblock::{BasicBlock, RewriteAction};
-pub use builder::{FunctionBuilder, ModuleBuilder};
+pub use function::FunctionBuilder;
 pub use label::Label;
+pub use module::ModuleBuilder;
 pub use traits::InstructionTrait;

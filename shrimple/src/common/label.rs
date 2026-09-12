@@ -7,6 +7,12 @@ pub struct Label<I>(
     pub(crate) PhantomData<I>,
 );
 
+impl<I> Label<I> {
+    pub fn name(&self) -> &'static str {
+        self.0
+    }
+}
+
 impl<I> PartialOrd for Label<I> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.0.partial_cmp(&other.0) {
@@ -23,7 +29,7 @@ impl<I> PartialOrd for Label<I> {
 
 impl<I> Ord for Label<I> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.2.cmp(&other.2)
+        self.1.cmp(&other.1)
     }
 }
 

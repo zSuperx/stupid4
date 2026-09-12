@@ -1,13 +1,14 @@
 use super::lexer::Lexer;
 use super::token::Token;
+use std::rc::Rc;
 
 use crate::IRs::hir::*;
 use crate::ast::*;
 use crate::common::{Span, Spanned};
 use crate::die;
-use crate::translation_unit::add_type;
+use crate::translation_unit::{add_str, qtype, rtype};
 
-pub struct Parser {
+struct Parser {
     lexer: Lexer,
 }
 
@@ -21,7 +22,7 @@ pub fn parse_file(filename: &str) -> Vec<Spanned<HirObj>> {
 }
 
 impl Parser {
-    pub fn new(filename: &str) -> Parser {
+    fn new(filename: &str) -> Parser {
         let filename: &'static str = filename.to_string().leak();
         Self {
             lexer: Lexer::new(filename),
@@ -45,7 +46,7 @@ impl Parser {
         Spanned::new(inner, start.merge(self.lexer.last_span))
     }
 
-    pub fn parse_obj(&mut self) -> Spanned<HirObj> {
+    fn parse_obj(&mut self) -> Spanned<HirObj> {
         let tok = self.lexer.peek();
         match tok.inner {
             Token::Fn => self.parse_func(),
@@ -119,9 +120,8 @@ impl Parser {
             }
             Token::LCurly => {
                 let span_start = self.mark();
-                let ty = Type::Void;
-                let id = add_type(ty);
-                self.commit(id, span_start)
+                let ty = rtype(&RawType::Base(add_str("void")));
+                self.commit(ty, span_start)
             }
             _ => die!("Expected return type or function body, found {peeked}"),
         };
@@ -137,18 +137,17 @@ impl Parser {
         self.commit(obj, span_start)
     }
 
-    fn parse_type(&mut self) -> Spanned<TypeId> {
+    fn parse_type(&mut self) -> Spanned<Rc<RawType>> {
         let span_start = self.mark();
         let tok = self.lexer.peek();
         let ty = match tok.inner {
             Token::Star => {
                 self.lexer.expect(Token::Star);
-                Type::Pointer(self.parse_type().inner)
+                RawType::Pointer(self.parse_type().inner)
             }
-            _ => Type::Unresolved(self.lexer.expect_ident().inner),
+            _ => RawType::Base(self.lexer.expect_ident().inner),
         };
-
-        let id = add_type(ty);
+        let id = rtype(&ty);
 
         self.commit(id, span_start)
     }
@@ -159,15 +158,25 @@ impl Parser {
         let stmt = match tok.inner {
             Token::Let => {
                 self.lexer.eat();
-                let lhs = self.lexer.expect_ident();
+                let name = self.lexer.expect_ident();
+                // The user may or may not provide a type, hence Option<RawType>
                 let ty = self.lexer.is_next(Token::Colon).then(|| {
                     self.lexer.expect(Token::Colon);
                     self.parse_type()
                 });
-                self.lexer.expect(Token::Eq);
-                let rhs = self.parse_expr();
-                self.lexer.expect(Token::Semi);
-                HirStmt::Let { lhs, ty, rhs }
+
+                let tok = self.lexer.eat();
+                match tok.inner {
+                    Token::Eq => {
+                        let value = self.parse_expr();
+                        self.lexer.expect(Token::Semi);
+                        HirStmt::LetAssign { name, ty, value }
+                    }
+                    Token::Semi => {
+                        HirStmt::LetDecl { name, ty }
+                    }
+                    _ => die!("Expected = or ; but got {tok}"),
+                }
             }
             Token::If => {
                 self.lexer.eat();
@@ -401,7 +410,7 @@ impl Parser {
         loop {
             let op = self.lexer.peek();
 
-            let Some(op_power) = infix_power(op.inner) else {
+            let Some(op_power) = infix_power(op.inner.clone()) else {
                 break;
             };
 

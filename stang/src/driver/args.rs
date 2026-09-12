@@ -1,5 +1,5 @@
-use clap::{Parser as ArgParser, ValueEnum};
 use crate::die;
+use clap::{Parser as ArgParser, ValueEnum};
 
 #[allow(nonstandard_style)]
 #[derive(Debug, Clone, Copy, ValueEnum)]

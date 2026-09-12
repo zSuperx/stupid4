@@ -216,6 +216,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "interner"
+version = "0.1.0"
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -373,7 +377,7 @@ name = "shrimple"
 version = "0.1.0"
 dependencies = [
  "bitset",
- "registry",
+ "interner",
  "smallvec",
 ]
 
@@ -392,7 +396,7 @@ dependencies = [
  "clap",
  "derived-deref",
  "heuristic-graph-coloring",
- "registry",
+ "interner",
  "shrimple",
  "tempfile",
 ]

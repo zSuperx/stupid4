@@ -44,7 +44,7 @@ impl x86Function {
         ret
     }
 
-    pub fn print(&mut self, include_comments: bool) {
+    pub fn print(&self, include_comments: bool) {
         println!("{}:", self.name);
         self.dfs(|mcf, curr_id| {
             println!("{curr_id}:");

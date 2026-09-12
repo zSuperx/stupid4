@@ -9,10 +9,10 @@ mod IRs;
 mod ast;
 mod codegen;
 mod common;
+mod driver;
 mod parser;
 mod sema;
 mod translation_unit;
-mod driver;
 
 fn main() {
     driver::run();
