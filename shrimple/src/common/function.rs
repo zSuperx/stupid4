@@ -11,22 +11,37 @@
 //!
 //! `pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType>;`
 use std::collections::{BTreeMap, HashSet};
-use std::rc::Rc;
 
-use crate::common::{BasicBlock, InstructionTrait, Label};
+use crate::common::{BasicBlock, InstructionTrait, Label, ModuleSymbol};
 
 #[derive(Debug, Clone)]
-pub struct FunctionBuilder<I: InstructionTrait, V, T> {
-    pub(crate) name: Rc<String>,
+pub struct FunctionBuilder<I: InstructionTrait, V, T, M> {
+    pub(crate) name: String,
+    pub(crate) symbol: ModuleSymbol,
     pub(crate) args: Vec<(V, T)>,
     pub(crate) return_type: T,
     pub(crate) entrypoint: Label<I>,
+
+    /// Collection of all blocks in the function.
+    ///
+    /// A BTreeMap is used so iteration uses a deterministic ordering for consistent code layout
+    ///
+    /// DO NOT ITERATE OVER THIS MAP DIRECTLY. Not all blocks in the map are reachable. The
+    /// visitor API traverses the function from its entrypoint to all its leaf nodes in a DFS
+    /// fashion. Therefore, things like terminator verification, IR translation, and even printing
+    /// only operate on reachable blocks, implying that unreachable blocks can be invalid!
     pub(crate) blocks: BTreeMap<Label<I>, BasicBlock<I>>,
-    
-    // TODO: move these to ModuleBuilder
+
+    /// The current basic block we're emitting into
     pub(crate) cursor: Label<I>,
+
+    /// Register counter
     pub(crate) reg_count: usize,
+    /// Basic Block counter
     pub(crate) block_count: usize,
+
+    /// Extra attached data
+    pub(crate) meta: M,
 }
 
 /// Given an `IRBuilder<I>` and format args, expands to `$builder.emit(Comment(format!(...)))`
@@ -40,13 +55,13 @@ macro_rules! comment {
     }
 }
 
-impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
+impl<I: InstructionTrait, V, T, M> FunctionBuilder<I, V, T, M> {
     /// Creates a new IR Function builder. The function is initialized with an empty BasicBlock as
     /// its entrypoint.
     ///
     /// The insert point is set to this entrypoint, so you can start emitting immediately after
     /// creating it.
-    pub fn new(name: Rc<String>, return_type: T) -> Self {
+    pub fn new(name: String, return_type: T, meta: M) -> Self {
         let cursor = Label("entrypoint", 0, Default::default());
         let blocks = BTreeMap::from([(cursor, BasicBlock::new(cursor))]);
         let block_count = 1;
@@ -60,7 +75,9 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
             block_count,
             blocks,
             entrypoint: cursor,
+            symbol: Default::default(),
             args: Default::default(),
+            meta,
         }
     }
 
@@ -231,10 +248,10 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
                 }
             }
 
-            if let Some(ft) = block.fallthrough {
-                if !seen.contains(&ft) {
-                    stack.push(ft);
-                }
+            if let Some(ft) = block.fallthrough
+                && !seen.contains(&ft)
+            {
+                stack.push(ft);
             }
         }
         false
@@ -259,10 +276,10 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
             }
 
             // Push the fallthrough block last to ensure its popped off next
-            if let Some(ft) = block.fallthrough {
-                if !seen.contains(&ft) {
-                    stack.push(ft);
-                }
+            if let Some(ft) = block.fallthrough
+                && !seen.contains(&ft)
+            {
+                stack.push(ft);
             }
         }
     }
@@ -286,10 +303,10 @@ impl<I: InstructionTrait, V, T> FunctionBuilder<I, V, T> {
             }
 
             // Push the fallthrough block last to ensure its popped off next
-            if let Some(ft) = block.fallthrough {
-                if !seen.contains(&ft) {
-                    stack.push(ft);
-                }
+            if let Some(ft) = block.fallthrough
+                && !seen.contains(&ft)
+            {
+                stack.push(ft);
             }
         }
     }

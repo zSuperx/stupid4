@@ -100,7 +100,13 @@ my $isa = {
     push => {
       args => [ "rs1:$VAL" ],
       uses => [ "rs1" ],
-    }
+    },
+
+    call => {
+      args => [ "rs1:$VAL" ],
+      uses => [ "rs1" ],
+      defs => [ "&RAX" ],
+    },
   },
 
   extraCode => [

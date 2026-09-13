@@ -12,13 +12,26 @@ struct Parser {
     lexer: Lexer,
 }
 
-pub fn parse_file(filename: &str) -> Vec<Spanned<HirObj>> {
-    let mut p = Parser::new(filename);
-    let mut objects = vec![];
-    while p.lexer.peek().inner != Token::Eof {
-        objects.push(p.parse_obj())
+#[derive(Debug, Default)]
+pub struct ParsedProgram {
+    pub functions: Vec<Spanned<HirFunction>>,
+    pub structs: Vec<Spanned<HirStruct>>,
+    pub globals: Vec<Spanned<HirGlobal>>,
+}
+
+pub fn parse_file(filename: &str) -> ParsedProgram {
+    let mut program = ParsedProgram::default();
+    let mut parser = Parser::new(filename);
+    while parser.lexer.peek().inner != Token::Eof {
+        let tok = parser.lexer.peek();
+        match tok.inner {
+            Token::Fn => program.functions.push(parser.parse_func()),
+            Token::Global => program.globals.push(parser.parse_global()),
+            Token::Struct => program.structs.push(parser.parse_struct()),
+            _ => die!("Expected `global`, `fn`, or `struct`, but got {tok}"),
+        }
     }
-    objects
+    program
 }
 
 impl Parser {
@@ -46,17 +59,7 @@ impl Parser {
         Spanned::new(inner, start.merge(self.lexer.last_span))
     }
 
-    fn parse_obj(&mut self) -> Spanned<HirObj> {
-        let tok = self.lexer.peek();
-        match tok.inner {
-            Token::Fn => self.parse_func(),
-            Token::Global => self.parse_global(),
-            Token::Struct => self.parse_struct(),
-            _ => die!("Expected `global`, `fn`, or `struct`, but got {tok}"),
-        }
-    }
-
-    fn parse_struct(&mut self) -> Spanned<HirObj> {
+    fn parse_struct(&mut self) -> Spanned<HirStruct> {
         let span_start = self.mark();
         self.lexer.expect(Token::Struct);
         let name = self.lexer.expect_ident();
@@ -70,11 +73,11 @@ impl Parser {
             fields.push((field_name, field_ty));
         }
         self.lexer.expect(Token::RCurly);
-        let inner = HirObj::Struct { name, fields };
-        self.commit(inner, span_start)
+        let struct_ = HirStruct { name, fields };
+        self.commit(struct_, span_start)
     }
 
-    fn parse_global(&mut self) -> Spanned<HirObj> {
+    fn parse_global(&mut self) -> Spanned<HirGlobal> {
         let span_start = self.mark();
         self.lexer.expect(Token::Global);
         let name = self.lexer.expect_ident();
@@ -83,7 +86,7 @@ impl Parser {
         self.lexer.expect(Token::Eq);
         let rhs = self.parse_expr();
         self.lexer.expect(Token::Semi);
-        let global = HirObj::Global {
+        let global = HirGlobal {
             name,
             ty,
             rhs: Box::new(rhs),
@@ -91,7 +94,7 @@ impl Parser {
         self.commit(global, span_start)
     }
 
-    fn parse_func(&mut self) -> Spanned<HirObj> {
+    fn parse_func(&mut self) -> Spanned<HirFunction> {
         let span_start = self.mark();
         self.lexer.expect(Token::Fn);
         let name = self.lexer.expect_ident();
@@ -128,13 +131,13 @@ impl Parser {
 
         let body = self.parse_block();
 
-        let obj = HirObj::Fn(HirFunction {
+        let function = HirFunction {
             name,
             return_type: returns,
             args,
             body,
-        });
-        self.commit(obj, span_start)
+        };
+        self.commit(function, span_start)
     }
 
     fn parse_type(&mut self) -> Spanned<Rc<RawType>> {
@@ -172,9 +175,7 @@ impl Parser {
                         self.lexer.expect(Token::Semi);
                         HirStmt::LetAssign { name, ty, value }
                     }
-                    Token::Semi => {
-                        HirStmt::LetDecl { name, ty }
-                    }
+                    Token::Semi => HirStmt::LetDecl { name, ty },
                     _ => die!("Expected = or ; but got {tok}"),
                 }
             }

@@ -1,10 +1,14 @@
 use shrimple::stir::builder::IRModule;
+use shrimple::x86Function;
 
-use crate::IRs::hir::HirObj;
+use crate::IRs::tir::TirFunction;
 use crate::ast::QualType;
+use crate::common::{Scopes, Spanned};
 use crate::driver::args::*;
 use crate::parser::parse_file;
-use crate::translation_unit::{TranslationUnit, add_str, qtype, global_state};
+use crate::sema::CompilerContext;
+use crate::translation_unit::{add_str, global_state, next_symbol, qtype};
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 pub static CFG: LazyLock<Config> = LazyLock::new(validate_config);
@@ -22,37 +26,69 @@ fn init_state() {
     ];
 
     for ty in builtin_types {
-        gs.type_names
-            .insert(add_str(&ty.to_string()), qtype(&ty));
+        gs.type_names.insert(add_str(ty.to_string()), qtype(&ty));
     }
 }
 
 pub fn run() {
     init_state();
 
-    let mut tu = TranslationUnit::new();
-    let objects = parse_file(&CFG.input);
-    tu.resolve_top_level(&objects);
+    let mut ctx = CompilerContext {
+        scopes: Scopes::new(),
+        loop_depth: 0,
+        loop_labels: Vec::new(),
+        symbol_table: Default::default(),
+        top_level_scope: Default::default(),
+        builder: IRModule::new(),
+    };
 
-    let mut objs = vec![];
-    for obj in objects {
-        match obj.inner {
-            HirObj::Fn(hir_function) => {
-                let tf = hir_function.type_check(&mut tu);
-                objs.push(tf);
+    let program = parse_file(&CFG.input);
+    ctx.resolve_top_level(&program);
+
+    let mut tir_functions = vec![];
+
+    for Spanned {
+        inner: hir_function,
+        ..
+    } in program.functions
+    {
+        let tf = TirFunction {
+            return_type: ctx.qualify_type(&hir_function.return_type.inner),
+            symbol: ctx.resolve_ident(&hir_function.name.inner).unwrap(),
+            name: hir_function.name.clone(),
+            local_symbols: HashSet::new(),
+            body: None,
+        };
+
+        ctx.reset();
+        let tir_function = hir_function.type_check(&mut ctx);
+        tir_functions.push(tir_function);
+    }
+
+    for tir_function in tir_functions.iter() {
+        ctx.builder.add_symbol(tir_function.name.inner.to_string());
+    }
+
+    for tir_function in tir_functions {
+        let ir_function = tir_function.codegen(&mut ctx);
+        ctx.builder.add_function(ir_function);
+    }
+
+    match CFG.action {
+        Action::EmitIr => {
+            for function in ctx.builder.functions() {
+                function.print(CFG.verbose);
+                println!()
             }
-            _ => {}
         }
-    }
-
-    let mut builder = IRModule::new();
-
-    for obj in objs {
-        obj.codegen(&mut builder);
-    }
-
-    for function in builder.functions() {
-        function.print(CFG.verbose);
-        println!()
+        Action::EmitAsm => {
+            for function in ctx.builder.functions() {
+                let target_function = x86Function::lower(function);
+                target_function.print(CFG.verbose);
+                println!()
+            }
+        }
+        Action::CompileOnly => todo!(),
+        Action::AssembleAndLink => todo!(),
     }
 }

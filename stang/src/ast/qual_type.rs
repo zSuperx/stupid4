@@ -75,9 +75,15 @@ impl QualType {
 
     pub fn get_pointee(&self) -> Rc<QualType> {
         match self {
-            QualType::Pointer(f) if let QualType::Function { .. } = **f => qtype(self),
             QualType::Pointer(p) => p.clone(),
             _ => die!("Not a pointer type: {self}"),
+        }
+    }
+
+    pub fn create_pointer(&self) -> Rc<QualType> {
+        match self {
+            QualType::Function { .. } => qtype(self),
+            _ => qtype(&QualType::Pointer(qtype(self))),
         }
     }
 

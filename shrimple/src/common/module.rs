@@ -1,61 +1,55 @@
-use crate::common::{BasicBlock, FunctionBuilder, InstructionTrait, Label};
-use std::collections::{BTreeMap, HashSet};
-use std::rc::Rc;
+use crate::common::{FunctionBuilder, InstructionTrait};
+use std::collections::{BTreeMap, HashMap};
 
-#[derive(Default, Debug)]
-pub struct ModuleBuilder<I: InstructionTrait, V, T> {
-    pub(crate) functions: BTreeMap<Rc<String>, FunctionBuilder<I, V, T>>,
-    pub(crate) reg_count: usize,
-    pub(crate) block_count: usize,
-    pub(crate) cursor: Option<(Rc<String>, Label<I>)>,
+#[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ModuleSymbol(&'static str);
+
+impl std::fmt::Display for ModuleSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
 }
 
-impl<I: InstructionTrait, V, T> ModuleBuilder<I, V, T> {
+#[derive(Default, Debug)]
+pub struct ModuleBuilder<I: InstructionTrait, V, T, M> {
+    pub(crate) symbols: HashMap<String, ModuleSymbol>,
+    pub(crate) functions: BTreeMap<ModuleSymbol, FunctionBuilder<I, V, T, M>>,
+    pub(crate) reg_count: usize,
+    pub(crate) block_count: usize,
+}
+
+impl<I: InstructionTrait, V, T, M> ModuleBuilder<I, V, T, M> {
     pub fn new() -> Self {
         Self {
+            symbols: Default::default(),
             functions: Default::default(),
-            reg_count: 0,
-            block_count: 0,
-            cursor: None,
+            reg_count: Default::default(),
+            block_count: Default::default(),
         }
     }
 
-    pub fn createFunction(
-        &mut self,
-        name: String,
-        return_type: T,
-    ) -> &mut FunctionBuilder<I, V, T> {
-        let rc = Rc::new(name);
-        let f = FunctionBuilder::new(rc.clone(), return_type);
-        let None = self.functions.insert(rc.clone(), f) else {
-            panic!("Duplicate function");
-        };
-        // TODO: make this not return anything but instead set a cursor?
-        self.functions.get_mut(&rc).unwrap()
+    pub fn add_symbol(&mut self, name: String) -> ModuleSymbol {
+        let symbol = ModuleSymbol(name.clone().leak());
+        self.symbols.insert(name, symbol);
+        symbol
+    }
+
+    pub fn add_function(&mut self, mut function: FunctionBuilder<I, V, T, M>) {
+        let symbol = self
+            .symbols
+            .get(&function.name)
+            .expect("Function symbol has not been added yet");
+        function.symbol = *symbol;
+        self.functions.insert(*symbol, function);
     }
 
     /// Get an iterator over the functions in this module
-    pub fn functions(&self) -> impl Iterator<Item = &FunctionBuilder<I, V, T>> {
+    pub fn functions(&self) -> impl Iterator<Item = &FunctionBuilder<I, V, T, M>> {
         self.functions.values()
     }
 
     /// Get an iterator over mutable functions in this module
-    pub fn functions_mut(&mut self) -> impl Iterator<Item = &mut FunctionBuilder<I, V, T>> {
+    pub fn functions_mut(&mut self) -> impl Iterator<Item = &mut FunctionBuilder<I, V, T, M>> {
         self.functions.values_mut()
-    }
-
-    pub fn emit(&mut self, instr: I) {
-        let (function_name, label) = self.cursor.clone().expect("Builder cursor not initialized");
-        let function = self.functions.get_mut(&function_name).unwrap();
-
-        let basic_block = function.blocks.get_mut(&label).unwrap();
-        if basic_block.terminator.is_some() {
-            return;
-        }
-        if instr.is_terminator() {
-            basic_block.terminator = Some(instr);
-        } else {
-            basic_block.instructions.push(instr);
-        }
     }
 }

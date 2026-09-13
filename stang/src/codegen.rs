@@ -1,7 +1,8 @@
 use crate::IRs::tir::*;
 use crate::ast::{BinOp, QualType};
 use crate::die;
-use crate::translation_unit::{FunctionContext, LoopLabels, SymbolKind, TranslationUnit, qtype};
+use crate::sema::CompilerContext;
+use crate::translation_unit::{LoopLabels, SymbolKind, qtype};
 
 use IRInstr::*;
 use shrimple::comment;
@@ -9,29 +10,35 @@ use shrimple::stir::builder::*;
 use shrimple::stir::isa::*;
 
 impl TirFunction {
-    pub fn codegen(mut self, builder: &mut IRModule) {
+    pub fn codegen(mut self, ctx: &mut CompilerContext) -> IRFunction {
         let irrty = match self.return_type.as_ref() {
             QualType::Void => IRType::I32,
             x => x.toIRType(),
         };
-        let mut function = builder.createFunction(self.name.inner.to_string(), irrty);
-        self.codegen_locals(&mut function);
-        self.body.take().unwrap().codegen(&mut function, &mut self);
+
+        let mut function =
+            IRFunction::new(self.name.inner.to_string(), self.return_type.toIRType(), ());
+
+        self.codegen_locals(ctx, &mut function);
+        self.body.take().unwrap().codegen(ctx, &mut function);
         let default_return = (*self.return_type == QualType::Void).then_some(Retv);
         if !function.verify(default_return) {
             die!(
-                "Function expected to return {}, but not all paths return a value: {}",
+                "Function {} expected to return {}, but not all paths return a value: {}",
+                self.name.inner,
                 self.return_type,
-                self.name,
+                self.name.span,
             )
         }
+        function
     }
 
-    fn codegen_locals(&mut self, function: &mut IRFunction) {
+    fn codegen_locals(&mut self, ctx: &mut CompilerContext, function: &mut IRFunction) {
         let mut args = vec![];
         let mut locals = vec![];
 
-        for (symbol, info) in self.symbol_table.iter() {
+        for symbol in self.local_symbols.iter() {
+            let info = ctx.lookup_symbol(symbol);
             match info.kind {
                 SymbolKind::Local => locals.push(symbol.clone()),
                 SymbolKind::Arg(_) => args.push(symbol.clone()),
@@ -42,7 +49,7 @@ impl TirFunction {
 
         // Sort argument symbols by their index
         args.sort_by_key(|s| {
-            let info = self.symbol_table.get(s).unwrap();
+            let info = ctx.lookup_symbol_mut(s);
             let SymbolKind::Arg(i) = info.kind else {
                 unreachable!()
             };
@@ -51,8 +58,8 @@ impl TirFunction {
 
         // Primitive args are alloca'd and filled normally, while structs are implicitly passed as pointers
         for symbol in args {
-            let info = self.symbol_table.get_mut(&symbol).unwrap();
-            let val = match info.ty.as_ref() {
+            let ty = ctx.lookup_symbol_mut(&symbol).ty.clone();
+            let val = match ty.as_ref() {
                 QualType::Struct { .. } => {
                     let arg = IRValue::Ptr(function.nextReg());
                     function.addArg(arg, IRType::Ptr);
@@ -63,23 +70,22 @@ impl TirFunction {
                     let dst = IRValue::Ptr(function.nextReg());
                     let irty = ty.toIRType();
                     function.emit(Alloca(irty, dst));
-                    comment!(function, "Argument {symbol} -> {dst}");
                     function.addArg(arg, irty);
                     function.emit(Store(irty, dst, arg));
                     dst
                 }
             };
             comment!(function, "Argument {symbol} lives in {val}");
-            info.value = Some(val);
+            ctx.lookup_symbol_mut(&symbol).value = Some(val);
         }
 
         // Sort locals by their local variable name
-        locals.sort_by_key(|s| self.symbol_table[s].raw_name.inner.clone());
+        locals.sort_by_key(|symbol| ctx.lookup_symbol_mut(symbol).raw_name.inner.clone());
 
         // Local variables are alloca'd but not initialized to anything
         for symbol in locals {
-            let info = self.symbol_table.get_mut(&symbol).unwrap();
-            let val = match info.ty.as_ref() {
+            let ty = ctx.lookup_symbol_mut(&symbol).ty.clone();
+            let val = match ty.as_ref() {
                 QualType::Struct { .. } => {
                     todo!("Figure out how to alloca aggregate types")
                 }
@@ -91,13 +97,13 @@ impl TirFunction {
                 }
             };
             comment!(function, "Local {symbol} lives in {val}");
-            info.value = Some(val);
+            ctx.lookup_symbol_mut(&symbol).value = Some(val);
         }
     }
 }
 
 impl TirStmt {
-    pub fn codegen(&self, function: &mut IRFunction, tf: &mut TirFunction) {
+    pub fn codegen(&self, ctx: &mut CompilerContext, function: &mut IRFunction) {
         match self {
             TirStmt::While { cond, body } => {
                 let cond_block = function.newNamedBlock("loopcond");
@@ -110,19 +116,19 @@ impl TirStmt {
 
                 // Codegen the cond expr
                 function.setInsertPoint(cond_block);
-                let cond_val = cond.codegen(function, tf);
+                let cond_val = cond.codegen(ctx, function);
 
                 function.emit(Br(cond_val, body_block, end_block));
                 function.addSuccessorsToCurrent(&[body_block, end_block]);
 
                 // Codegen the body stmt
-                tf.loop_labels.push(LoopLabels {
+                ctx.loop_labels.push(LoopLabels {
                     cond_block,
                     end_block,
                 });
                 function.setInsertPoint(body_block);
-                body.codegen(function, tf);
-                tf.loop_labels.pop();
+                body.codegen(ctx, function);
+                ctx.loop_labels.pop();
 
                 // Body always jumps to cond
                 function.emit(Jmp(cond_block));
@@ -132,13 +138,13 @@ impl TirStmt {
                 function.setInsertPoint(end_block);
             }
             TirStmt::Continue => {
-                let Some(LoopLabels { cond_block, .. }) = tf.loop_labels.last().copied() else {
+                let Some(LoopLabels { cond_block, .. }) = ctx.loop_labels.last().copied() else {
                     die!("Continue statements can only be called within loops.");
                 };
                 function.emit(Jmp(cond_block));
             }
             TirStmt::Break => {
-                let Some(LoopLabels { end_block, .. }) = tf.loop_labels.last().copied() else {
+                let Some(LoopLabels { end_block, .. }) = ctx.loop_labels.last().copied() else {
                     die!("Continue statements can only be called within loops.");
                 };
                 function.emit(Jmp(end_block));
@@ -149,14 +155,14 @@ impl TirStmt {
                 let endif_block = function.newNamedBlock("endif");
 
                 // Codegen the cond expr
-                let cond_val = cond.codegen(function, tf);
+                let cond_val = cond.codegen(ctx, function);
 
                 function.emit(Br(cond_val, then_block, else_block));
                 function.addSuccessorsToCurrent(&[then_block, else_block]);
 
                 // Codegen then stmt
                 function.setInsertPoint(then_block);
-                then_.codegen(function, tf);
+                then_.codegen(ctx, function);
 
                 // Then will jump to endif if not already terminated
                 if !function.isCurrentTerminated() {
@@ -166,7 +172,7 @@ impl TirStmt {
 
                 // Codegen else stmt
                 function.setInsertPoint(else_block);
-                else_.codegen(function, tf);
+                else_.codegen(ctx, function);
 
                 // Else always jumps to join
                 if !function.isCurrentTerminated() {
@@ -179,62 +185,58 @@ impl TirStmt {
             }
             TirStmt::Return(ret_val) => match ret_val {
                 Some(expr) => {
-                    let val = expr.codegen(function, tf);
-                    function.emit(Ret(*function.getReturnType(), val));
+                    let val = expr.codegen(ctx, function);
+                    let irty = *function.getReturnType();
+                    function.emit(Ret(irty, val));
                 }
                 None => function.emit(Retv),
             },
             TirStmt::Block(stmts) => {
                 for stmt in stmts.iter() {
-                    stmt.codegen(function, tf);
+                    stmt.codegen(ctx, function);
                 }
             }
             TirStmt::Expr(expr) => {
-                expr.codegen(function, tf);
+                expr.codegen(ctx, function);
             }
         }
     }
 }
 
 impl TirExpr {
-    pub fn codegen(&self, function: &mut IRFunction, tf: &mut TirFunction) -> IRValue {
+    pub fn codegen(&self, ctx: &mut CompilerContext, function: &mut IRFunction) -> IRValue {
         match &self.kind {
             TirExprKind::Num(n) => IRValue::Imm(*n),
             TirExprKind::Bool(b) => IRValue::Imm((*b).into()),
             TirExprKind::Store { ptr, val } => {
                 let irty = val.ty.toIRType();
-                let ptr = ptr.codegen(function, tf);
-                let val = val.codegen(function, tf);
+                let ptr = ptr.codegen(ctx, function);
+                let val = val.codegen(ctx, function);
                 function.emit(Store(irty, ptr, val));
                 val
             }
             TirExprKind::Load { inner } => {
                 let irty = inner.ty.get_pointee().toIRType();
-                let ptr = inner.codegen(function, tf);
-                let val = IRValue::Reg(function.nextReg());
+                let ptr = inner.codegen(ctx, function);
+                let val = IRValue::typed(function.nextReg(), irty);
                 function.emit(Load(irty, ptr, val));
                 val
             }
-            TirExprKind::ValueOf(id) => {
-                let info = &tf.symbol_table[id];
+            TirExprKind::ValueOf(symbol) => {
+                let info = ctx.lookup_symbol(symbol);
                 let irty = info.ty.toIRType();
                 let ptr = info.value.expect("Symbol should have a value by now");
-                let dst = IRValue::Reg(function.nextReg());
+                let dst = IRValue::typed(function.nextReg(), irty);
                 function.emit(Load(irty, ptr, dst));
                 dst
             }
-            TirExprKind::AddrOf(id) => {
-                println!("Codegen for AddrOf {id}");
-                tf.symbol_table[id]
-                    .value
-                    .expect("Symbol should have a value by now")
-            }
+            TirExprKind::AddrOf(symbol) => ctx.lookup_symbol(symbol).value.expect("No value"),
             TirExprKind::Un { op, rhs } => todo!(),
             TirExprKind::Bin { op, lhs, rhs } => {
                 let ty = self.ty.clone();
                 let irty = ty.toIRType();
-                let lhs_val = lhs.codegen(function, tf);
-                let rhs_val = rhs.codegen(function, tf);
+                let lhs_val = lhs.codegen(ctx, function);
+                let rhs_val = rhs.codegen(ctx, function);
                 match op {
                     BinOp::Add => {
                         let result = IRValue::typed(function.nextReg(), irty);
@@ -321,7 +323,7 @@ impl TirExpr {
                 }
             }
             TirExprKind::Cast { target_ty, expr } => {
-                let rhs_val = expr.codegen(function, tf);
+                let rhs_val = expr.codegen(ctx, function);
 
                 let from_ty = expr.ty.toIRType();
                 let to_ty = target_ty.toIRType();
@@ -345,15 +347,13 @@ impl TirExpr {
                 }
                 dst
             }
-            TirExprKind::DirectCall { callee, args } => {
-                let arg_values: Vec<_> = args.iter().map(|a| a.codegen(function, tf)).collect();
+            TirExprKind::Call { callee, args } => {
+                let callee_val = callee.codegen(ctx, function);
+                let arg_values: Vec<_> = args.iter().map(|a| a.codegen(ctx, function)).collect();
                 let irty = self.ty.toIRType();
                 let dst = IRValue::typed(function.nextReg(), irty);
-                function.emit(Call(irty, dst, callee.to_string(), arg_values.into()));
+                function.emit(Call(irty, dst, callee_val, arg_values.into()));
                 dst
-            }
-            TirExprKind::IndirectCall { callee, args } => {
-                todo!("Add indirect call instruction to backend")
             }
         }
     }

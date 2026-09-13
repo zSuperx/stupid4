@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use super::*;
@@ -29,48 +30,8 @@ pub enum TirObj {
 #[derive(Debug)]
 pub struct TirFunction {
     pub name: Spanned<RcString>,
-
     pub symbol: Symbol,
-
     pub return_type: Rc<QualType>,
-
-    /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
-    /// most (current) scope, going up in scopes on failure
-    pub env: Env<RcString, Symbol>,
-
-    /// Used to codegen continue/break
-    pub loop_labels: Vec<LoopLabels>,
-
-    /// Use in sema to validate use of continue/break
-    pub loop_depth: usize,
-
-    pub symbol_table: HashMap<Symbol, SymbolInfo>,
-
-    pub symbol_counter: usize,
-
+    pub local_symbols: HashSet<Symbol>,
     pub body: Option<TirStmt>,
-}
-
-impl TirFunction {
-    pub fn add_local_symbol(
-        &mut self,
-        name: Spanned<RcString>,
-        ty: Rc<QualType>,
-        kind: SymbolKind,
-    ) -> Symbol {
-        let symbol = next_symbol(&name.inner);
-        self.env.insert(name.inner.clone(), symbol.clone());
-        self.symbol_table.insert(
-            symbol.clone(),
-            SymbolInfo {
-                symbol: symbol.clone(),
-                raw_name: name,
-                ty,
-                kind,
-                address_taken: Default::default(),
-                value: Default::default(),
-            },
-        );
-        symbol
-    }
 }

@@ -72,7 +72,7 @@ sub printEnum {
   foreach my $op (sort keys %instructions) {
     my $instr = $instructions{$op};
     $arms .= "$TAB";
-    $arms .= "/// ";
+    $arms .= "/// $op: ";
     $arms .= join(", ", getArgNames($instr->{args}));
     $arms .= "\n";
     $arms .= "$TAB";

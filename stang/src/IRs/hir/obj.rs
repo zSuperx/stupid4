@@ -1,21 +1,20 @@
 use super::*;
 use crate::ast::*;
-use crate::common::Spanned;
 use crate::common::RcString;
+use crate::common::Spanned;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-pub enum HirObj {
-    Fn(HirFunction),
-    Global {
-        name: Spanned<RcString>,
-        ty: Spanned<Rc<RawType>>,
-        rhs: Box<Spanned<HirExpr>>,
-    },
-    Struct {
-        name: Spanned<RcString>,
-        fields: Vec<(Spanned<RcString>, Spanned<Rc<RawType>>)>,
-    },
+pub struct HirGlobal {
+    pub name: Spanned<RcString>,
+    pub ty: Spanned<Rc<RawType>>,
+    pub rhs: Box<Spanned<HirExpr>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirStruct {
+    pub name: Spanned<RcString>,
+    pub fields: Vec<(Spanned<RcString>, Spanned<Rc<RawType>>)>,
 }
 
 #[derive(Debug, Clone)]

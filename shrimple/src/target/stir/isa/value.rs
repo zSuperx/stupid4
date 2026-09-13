@@ -1,5 +1,7 @@
 use smallvec::{SmallVec, smallvec};
 
+use crate::common::ModuleSymbol;
+
 use super::IRType;
 
 pub type VReg = usize;
@@ -9,6 +11,7 @@ pub enum IRValue {
     Reg(VReg),
     Ptr(VReg),
     Imm(i128),
+    Sym(ModuleSymbol),
 }
 
 impl IRValue {
@@ -28,19 +31,17 @@ impl IRValue {
     pub fn getReg(&self) -> SmallVec<[VReg; 2]> {
         match self {
             IRValue::Reg(r) | IRValue::Ptr(r) => smallvec![*r],
-            IRValue::Imm(_) => smallvec![],
+            _ => smallvec![],
         }
     }
 
     /// Rewrites all instances of `old` with `new` within the value.
     pub fn rewriteReg(&mut self, old: VReg, new: VReg) {
         match self {
-            IRValue::Reg(r) | IRValue::Ptr(r) => {
-                if old == *r {
-                    *r = new;
-                }
+            IRValue::Reg(r) | IRValue::Ptr(r) if old == *r => {
+                *r = new;
             }
-            IRValue::Imm(_) => {}
+            _ => {}
         }
     }
 
@@ -62,7 +63,8 @@ impl std::fmt::Display for IRValue {
         match self {
             IRValue::Reg(r) => f.write_fmt(format_args!("%{r}")),
             IRValue::Imm(i) => f.write_fmt(format_args!("#{i}")),
-            IRValue::Ptr(r) => f.write_fmt(format_args!("ptr %{r}")),
+            IRValue::Ptr(r) => f.write_fmt(format_args!("%{r}")),
+            IRValue::Sym(s) => f.write_fmt(format_args!("@{s}")),
         }
     }
 }

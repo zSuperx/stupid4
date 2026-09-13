@@ -1,6 +1,6 @@
 use crate::ast::*;
-use crate::common::Spanned;
 use crate::common::RcString;
+use crate::common::Spanned;
 use std::rc::Rc;
 
 use super::*;

@@ -49,12 +49,12 @@ my $isa = {
     trunc => $resizeOp,
 
     call => {
-      args => [ "ty:$TY", "dst:$VAL", "callee:String", "args:SmallVec<[$VAL; 4]>" ],
+      args => [ "ty:$TY", "dst:$VAL", "callee:$VAL", "args:SmallVec<[$VAL; 4]>" ],
       defs => [ "dst" ],
       uses_raw => "args.iter().collect()", # args is itself a smallvec, so use it raw
       fmt_raw => q~{
               let args_str = args.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
-              f.write_fmt(format_args!("{dst} = {callee}({args_str})"))
+              f.write_fmt(format_args!("{dst} = call {callee}({args_str})"))
           }
       ~,
     },
@@ -83,13 +83,13 @@ my $isa = {
       args => [ "ty:$TY", "ptr:$VAL", "dst:$VAL" ],
       uses => [ "ptr" ],
       defs => [ "dst" ],
-      fmt  => "{dst} = load {ty} from {ptr}",
+      fmt  => "{dst} = load {ty} from ptr {ptr}",
     },
 
     store => {
       args => [ "ty:$TY", "ptr:$VAL", "rs1:$VAL" ],
       uses => [ "ptr", "rs1" ],
-      fmt  => "store {ty} {rs1} into {ptr}",
+      fmt  => "store {ty} {rs1} into ptr {ptr}",
     },
 
     icmp => {
@@ -124,6 +124,7 @@ my $isa = {
 
   extraCode => [
     "use crate::target::stir::isa::*;",
+    "use crate::common::ModuleSymbol;",
     "use crate::target::stir::builder::*;",
   ],
 

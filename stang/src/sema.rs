@@ -1,41 +1,88 @@
+use shrimple::stir::builder::IRModule;
+
 use crate::IRs::{hir::*, tir::*};
 use crate::ast::*;
 use crate::common::*;
-use crate::translation_unit::{
-    FunctionContext, SymbolInfo, SymbolKind, TranslationUnit, lookup_ident, lookup_symbol, qtype,
-};
+use crate::translation_unit::{LoopLabels, Symbol, SymbolInfo, SymbolKind, next_symbol, qtype};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+pub struct CompilerContext {
+    pub symbol_table: HashMap<Symbol, SymbolInfo>,
+    pub scopes: Scopes<RcString, Symbol>,
+    pub top_level_scope: HashMap<RcString, Symbol>,
+    pub loop_labels: Vec<LoopLabels>,
+    pub loop_depth: usize,
+    pub builder: IRModule,
+}
+
+impl CompilerContext {
+    pub fn create_symbol(
+        &mut self,
+        raw_name: Spanned<RcString>,
+        qual_ty: Rc<QualType>,
+        kind: SymbolKind,
+    ) -> Symbol {
+        let symbol = next_symbol(&raw_name.inner);
+        self.scopes.insert(raw_name.inner.clone(), symbol.clone());
+        self.symbol_table.insert(
+            symbol.clone(),
+            SymbolInfo {
+                symbol: symbol.clone(),
+                raw_name,
+                value: None,
+                ty: qual_ty,
+                kind,
+                address_taken: false,
+            },
+        );
+        symbol
+    }
+
+    /// Searches the scope stack top-to-bottom, falling back to the global scope if no local binding
+    /// exists
+    pub fn resolve_ident(&self, name: &RcString) -> Option<Symbol> {
+        self.scopes
+            .get(name)
+            .clone()
+            .or_else(|| self.top_level_scope.get(name).cloned())
+    }
+
+    pub fn lookup_symbol(&self, symbol: &Symbol) -> &SymbolInfo {
+        self.symbol_table.get(symbol).as_ref().unwrap()
+    }
+
+    pub fn lookup_symbol_mut(&mut self, symbol: &Symbol) -> &mut SymbolInfo {
+        self.symbol_table.get_mut(symbol).unwrap()
+    }
+
+    pub fn reset(&mut self) {
+        self.loop_labels = Default::default();
+        self.loop_depth = Default::default();
+    }
+}
 
 impl HirFunction {
     /// Type checking a HIR Function produces a TIR Function, which holds the necessary context for
     /// code generation
-    pub fn type_check(self, tu: &mut TranslationUnit) -> TirFunction {
-        let return_type = tu.qualify_type(&self.return_type.inner);
-        let symbol = tu.top_level_scope.get(&self.name.inner).cloned().unwrap();
-
+    pub fn type_check(self, ctx: &mut CompilerContext) -> TirFunction {
         let mut tf = TirFunction {
+            return_type: ctx.qualify_type(&self.return_type.inner),
+            symbol: ctx.resolve_ident(&self.name.inner).unwrap(),
             name: self.name,
-            symbol,
-            return_type,
-            env: Env::with_base(tu.top_level_scope.clone()),
-            loop_labels: Default::default(),
-            loop_depth: Default::default(),
-            symbol_table: Default::default(),
-            symbol_counter: Default::default(),
-            body: Default::default(),
+            local_symbols: HashSet::new(),
+            body: None,
         };
 
         let mut args = vec![];
         for (i, (raw_arg_name, raw_arg_type)) in self.args.into_iter().enumerate() {
-            let arg_symbol = tf.add_local_symbol(
-                raw_arg_name,
-                tu.qualify_type(&raw_arg_type.inner),
-                SymbolKind::Arg(i),
-            );
+            let ty = ctx.qualify_type(&raw_arg_type.inner);
+            let arg_symbol = ctx.create_symbol(raw_arg_name, ty, SymbolKind::Arg(i));
+            tf.local_symbols.insert(arg_symbol.clone());
             args.push(arg_symbol)
         }
 
-        let body = self.body.type_check(tu, &mut tf);
+        let body = self.body.type_check(ctx, &mut tf);
         tf.body = Some(body);
         tf
     }
@@ -43,15 +90,16 @@ impl HirFunction {
 
 impl Spanned<HirStmt> {
     // Type checking a HIR statement requires the context of its parent function
-    pub fn type_check(&self, tu: &mut TranslationUnit, tf: &mut TirFunction) -> TirStmt {
+    pub fn type_check(&self, ctx: &mut CompilerContext, function: &mut TirFunction) -> TirStmt {
         let span = self.span;
         match &self.inner {
             HirStmt::LetDecl { name, ty } => {
                 let Some(user_ty) = ty else {
                     die!("Uninitialized variables must be declared with a type {span}");
                 };
-                let qty = tu.qualify_type(&user_ty.inner);
-                let symbol = tf.add_local_symbol(name.clone(), qty, SymbolKind::Local);
+                let qty = ctx.qualify_type(&user_ty.inner);
+                let symbol = ctx.create_symbol(name.clone(), qty, SymbolKind::Local);
+                function.local_symbols.insert(symbol);
                 // TODO: add a no-op or empty stmt
                 TirStmt::Block(vec![])
             }
@@ -60,8 +108,8 @@ impl Spanned<HirStmt> {
                 ty,
                 value,
             } => {
-                let desired_type = ty.as_ref().map(|t| tu.qualify_type(&t.inner));
-                let checked_val = value.type_check_rvalue(tu, tf, desired_type.clone());
+                let desired_type = ty.as_ref().map(|t| ctx.qualify_type(&t.inner));
+                let checked_val = value.type_check_rvalue(ctx, desired_type.clone());
                 if let Some(lhs_ty) = desired_type
                     && lhs_ty != checked_val.ty
                 {
@@ -73,11 +121,14 @@ impl Spanned<HirStmt> {
                 } else {
                     checked_val.ty.clone()
                 };
-                let symbol = tf.add_local_symbol(lhs.clone(), rhs_ty.clone(), SymbolKind::Local);
+
+                let symbol = ctx.create_symbol(lhs.clone(), rhs_ty.clone(), SymbolKind::Local);
+                function.local_symbols.insert(symbol.clone());
+
                 let expr = {
                     let ty = rhs_ty.clone();
                     let kind = TirExprKind::Store {
-                        ptr: Box::new(lookup_symbol(tu, tf, symbol).create_addr_of()),
+                        ptr: Box::new(ctx.lookup_symbol_mut(&symbol).create_addr_of()),
                         val: Box::new(checked_val),
                     };
                     TirExpr::new(kind, ty)
@@ -86,17 +137,15 @@ impl Spanned<HirStmt> {
             }
             HirStmt::While { cond, body } => {
                 let hint = qtype(&QualType::Bool);
-                let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
+                let checked_cond = cond.type_check_rvalue(ctx, Some(hint));
                 let cond_ty = checked_cond.ty.clone();
                 if *cond_ty != QualType::Bool {
                     die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
 
-                tf.env.push_scope();
-                tf.loop_depth += 1;
-                let checked_body = body.type_check(tu, tf);
-                tf.loop_depth -= 1;
-                tf.env.pop_scope();
+                ctx.loop_depth += 1;
+                let checked_body = body.type_check(ctx, function);
+                ctx.loop_depth -= 1;
 
                 TirStmt::While {
                     cond: checked_cond,
@@ -104,26 +153,26 @@ impl Spanned<HirStmt> {
                 }
             }
             HirStmt::Continue => {
-                if tf.loop_depth == 0 {
+                if ctx.loop_depth == 0 {
                     die!("continue statements can only be called within loops");
                 }
                 TirStmt::Continue
             }
             HirStmt::Break => {
-                if tf.loop_depth == 0 {
+                if ctx.loop_depth == 0 {
                     die!("break statements can only be called within loops");
                 }
                 TirStmt::Break
             }
             HirStmt::If { cond, then_, else_ } => {
                 let hint = qtype(&QualType::Bool);
-                let checked_cond = cond.type_check_rvalue(tu, tf, Some(hint));
+                let checked_cond = cond.type_check_rvalue(ctx, Some(hint));
                 let cond_ty = checked_cond.ty.clone();
                 if *cond_ty != QualType::Bool {
                     die!("Type mismatch. Expected bool but got {cond_ty}: {span}",)
                 }
-                let checked_then = Box::new(then_.type_check(tu, tf));
-                let checked_else = Box::new(else_.type_check(tu, tf));
+                let checked_then = Box::new(then_.type_check(ctx, function));
+                let checked_else = Box::new(else_.type_check(ctx, function));
                 TirStmt::If {
                     cond: checked_cond,
                     then_: checked_then,
@@ -132,22 +181,23 @@ impl Spanned<HirStmt> {
             }
             HirStmt::Return(expr) => {
                 let ret_val = if let Some(expr) = expr {
-                    let checked_expr = expr.type_check_rvalue(tu, tf, Some(tf.return_type.clone()));
-                    if checked_expr.ty != tf.return_type {
+                    let checked_expr =
+                        expr.type_check_rvalue(ctx, Some(function.return_type.clone()));
+                    if checked_expr.ty != function.return_type {
                         die!(
                             "Function {} expected return type {}, but got {}: {span}",
-                            tf.name,
-                            tf.return_type,
+                            function.name,
+                            function.return_type,
                             checked_expr.ty,
                         );
                     }
                     Some(checked_expr)
                 } else {
-                    if *tf.return_type != QualType::Void {
+                    if *function.return_type != QualType::Void {
                         die!(
                             "Function {} expected return type {}, but got void: {span}",
-                            tf.name,
-                            tf.return_type,
+                            function.name,
+                            function.return_type,
                         )
                     }
                     None
@@ -155,9 +205,13 @@ impl Spanned<HirStmt> {
                 TirStmt::Return(ret_val)
             }
             HirStmt::Block(stmts) => {
-                TirStmt::Block(stmts.into_iter().map(|s| s.type_check(tu, tf)).collect())
+                ctx.scopes.push_scope();
+                let ret =
+                    TirStmt::Block(stmts.iter().map(|s| s.type_check(ctx, function)).collect());
+                ctx.scopes.pop_scope();
+                ret
             }
-            HirStmt::Expr(stmt) => TirStmt::Expr(stmt.type_check_rvalue(tu, tf, None)),
+            HirStmt::Expr(stmt) => TirStmt::Expr(stmt.type_check_rvalue(ctx, None)),
         }
     }
 }
@@ -165,24 +219,23 @@ impl Spanned<HirStmt> {
 impl Spanned<HirExpr> {
     pub fn type_check_lvalue(
         &self,
-        tu: &mut TranslationUnit,
-        tf: &mut TirFunction,
+        ctx: &mut CompilerContext,
         hint: Option<Rc<QualType>>,
     ) -> TirExpr {
         let span = self.span;
         match &self.inner {
             HirExpr::Ident(i) => {
-                let Some(symbol) = tf.env.get(&i) else {
+                let Some(symbol) = ctx.resolve_ident(i) else {
                     die!("Use of undefined variable: {span}")
                 };
                 let kind = TirExprKind::AddrOf(symbol.clone());
-                let inner_ty = lookup_symbol(tu, tf, symbol).ty.clone();
-                let ty = qtype(&QualType::Pointer(inner_ty));
+                let inner_ty = ctx.lookup_symbol_mut(&symbol).ty.clone();
+                let ty = inner_ty.create_pointer();
                 TirExpr::new(kind, ty)
             }
             HirExpr::Index { base, index } => {
-                let checked_base = base.type_check_rvalue(tu, tf, hint);
-                let checked_index = index.type_check_rvalue(tu, tf, Some(qtype(&QualType::U64)));
+                let checked_base = base.type_check_rvalue(ctx, hint);
+                let checked_index = index.type_check_rvalue(ctx, Some(qtype(&QualType::U64)));
                 if !checked_base.ty.is_pointer() {
                     die!(
                         "Can't index into non-pointer type {}: {base}",
@@ -206,7 +259,7 @@ impl Spanned<HirExpr> {
                 TirExpr::new(kind, ty)
             }
             HirExpr::Deref { inner } => {
-                let ptr = inner.type_check_rvalue(tu, tf, hint);
+                let ptr = inner.type_check_rvalue(ctx, hint);
                 if !ptr.ty.is_pointer() {
                     die!("Cannot dereference non-pointer type {}: {span}", ptr.ty);
                 }
@@ -219,8 +272,7 @@ impl Spanned<HirExpr> {
 
     pub fn type_check_rvalue(
         &self,
-        tu: &mut TranslationUnit,
-        tf: &mut TirFunction,
+        ctx: &mut CompilerContext,
         hint: Option<Rc<QualType>>,
     ) -> TirExpr {
         let span = self.span;
@@ -263,16 +315,15 @@ impl Spanned<HirExpr> {
                 TirExpr::new(kind, ty)
             }
             HirExpr::Ident(i) => {
-                let Some(info) = lookup_ident(tu, tf, i) else {
+                let Some(symbol) = ctx.resolve_ident(i) else {
                     die!("Use of undefined variable {i}: {span}")
                 };
 
+                let info = ctx.lookup_symbol_mut(&symbol);
+
                 match info.ty.as_ref() {
-                    QualType::Function { .. } => {
-                        let kind = TirExprKind::AddrOf(info.symbol.clone());
-                        let ty = qtype(&QualType::Pointer(info.ty.clone()));
-                        TirExpr::new(kind, ty)
-                    }
+                    // Addressing a function by its name should result in a function pointer
+                    QualType::Function { .. } => info.create_addr_of(),
                     _ => {
                         let kind = TirExprKind::ValueOf(info.symbol.clone());
                         TirExpr::new(kind, info.ty.clone())
@@ -282,11 +333,11 @@ impl Spanned<HirExpr> {
             HirExpr::Assign { lhs, rhs } => {
                 // This should become a Store?
                 // Check the LHS as an LVALUE. It must be a storage location
-                let checked_lhs = lhs.type_check_lvalue(tu, tf, None);
+                let checked_lhs = lhs.type_check_lvalue(ctx, None);
                 let lhs_ty = checked_lhs.ty.get_pointee().clone();
 
                 // RHS can be anything
-                let checked_rhs = rhs.type_check_rvalue(tu, tf, Some(lhs_ty.clone()));
+                let checked_rhs = rhs.type_check_rvalue(ctx, Some(lhs_ty.clone()));
                 let rhs_ty = if let QualType::Function { .. } = checked_rhs.ty.as_ref() {
                     qtype(&QualType::Pointer(checked_rhs.ty.clone()))
                 } else {
@@ -307,35 +358,39 @@ impl Spanned<HirExpr> {
                 };
                 TirExpr::new(kind, ty)
             }
-            HirExpr::AddrOf { inner } => inner.type_check_lvalue(tu, tf, None),
+            HirExpr::AddrOf { inner } => inner.type_check_lvalue(ctx, None),
             HirExpr::SizeOfTy { ty } => {
-                let qt = tu.qualify_type(&ty.inner);
+                let qt = ctx.qualify_type(&ty.inner);
                 let kind = TirExprKind::Num(qt.bytes() as i128);
                 let ty = qtype(&QualType::U64);
                 TirExpr::new(kind, ty)
             }
             HirExpr::SizeOfExpr { expr } => {
-                let kind =
-                    TirExprKind::Num(expr.type_check_rvalue(tu, tf, None).ty.bytes() as i128);
+                let kind = TirExprKind::Num(expr.type_check_rvalue(ctx, None).ty.bytes() as i128);
                 let ty = qtype(&QualType::U64);
                 TirExpr::new(kind, ty)
             }
             HirExpr::Deref { inner } => {
-                let ptr = inner.type_check_rvalue(tu, tf, None);
-                let ty = ptr.ty.get_pointee();
-                println!("Dereferencing {} to {}", ptr.ty, ty);
-                let kind = TirExprKind::Load {
-                    inner: Box::new(ptr),
-                };
-                TirExpr::new(kind, ty)
+                let ptr = inner.type_check_rvalue(ctx, None);
+                match ptr.ty.as_ref() {
+                    // Dereferencing a function pointer should be a no-op
+                    QualType::Function { .. } => ptr,
+                    _ => {
+                        let ty = ptr.ty.get_pointee();
+                        let kind = TirExprKind::Load {
+                            inner: Box::new(ptr),
+                        };
+                        TirExpr::new(kind, ty)
+                    }
+                }
             }
             HirExpr::Index { base, index } => {
-                let base = base.type_check_rvalue(tu, tf, None);
+                let base = base.type_check_rvalue(ctx, None);
                 if !base.ty.is_pointer() {
                     die!("Cannot index into non-pointer type {}: {span}", base.ty);
                 }
                 let hint = qtype(&QualType::U64);
-                let index = index.type_check_rvalue(tu, tf, Some(hint));
+                let index = index.type_check_rvalue(ctx, Some(hint));
                 let ty = base.ty.get_pointee();
 
                 let inner = {
@@ -355,7 +410,7 @@ impl Spanned<HirExpr> {
             }
             HirExpr::Field { base, field } => todo!(),
             HirExpr::Un { op, rhs } => {
-                let checked_rhs = rhs.type_check_rvalue(tu, tf, hint);
+                let checked_rhs = rhs.type_check_rvalue(ctx, hint);
                 let rhs_ty = checked_rhs.ty.clone();
                 let ty = match op {
                     UnOp::Not => {
@@ -395,9 +450,9 @@ impl Spanned<HirExpr> {
                     }
                 }
 
-                let lhs = lhs.type_check_rvalue(tu, tf, hint);
+                let lhs = lhs.type_check_rvalue(ctx, hint);
                 let lhs_class = classify_type(lhs.ty.as_ref());
-                let rhs = rhs.type_check_rvalue(tu, tf, Some(lhs.ty.clone()));
+                let rhs = rhs.type_check_rvalue(ctx, Some(lhs.ty.clone()));
                 let rhs_class = classify_type(rhs.ty.as_ref());
 
                 let (op, ty) = match (lhs_class, op, rhs_class) {
@@ -451,9 +506,9 @@ impl Spanned<HirExpr> {
                 // Casting should be valid between:
                 // - Same sized types (this means all pointers can be cast to and from each other)
                 // - Any primitive with any other primitive
-                let checked_ty = tu.qualify_type(&target_ty.inner);
+                let checked_ty = ctx.qualify_type(&target_ty.inner);
                 println!("Casting to {checked_ty}");
-                let checked_rhs = rhs.type_check_rvalue(tu, tf, None);
+                let checked_rhs = rhs.type_check_rvalue(ctx, None);
                 let kind = TirExprKind::Cast {
                     target_ty: checked_ty.clone(),
                     expr: Box::new(checked_rhs),
@@ -461,88 +516,46 @@ impl Spanned<HirExpr> {
                 TirExpr::new(kind, checked_ty)
             }
             HirExpr::Call { callee, args } => {
-                enum CallKind {
-                    Direct,
-                    Indirect,
-                }
+                let checked_callee = callee.type_check_rvalue(ctx, None);
 
-                if let HirExpr::Ident(name) = callee.inner.clone() {
-                    let Some(info) = lookup_ident(tu, tf, &name) else {
-                        die!("Use of undefined variable {name}: {span}")
-                    };
-
-                    let symbol = info.symbol.clone();
-
-                    if let QualType::Function {
-                        arg_types,
-                        return_type,
-                    } = info.ty.as_ref()
-                    {
-                        if arg_types.len() != args.len() {
-                            die!(
-                                "Function expects {} args but got {}: {span}",
-                                arg_types.len(),
-                                args.len()
-                            )
-                        }
-                        let mut checked_args = vec![];
-                        let ty = return_type.clone();
-                        for (arg, expected_arg_type) in args.iter().zip(arg_types.clone().iter()) {
-                            let checked_arg =
-                                arg.type_check_rvalue(tu, tf, Some(expected_arg_type.clone()));
-                            if checked_arg.ty != *expected_arg_type {
-                                die!(
-                                    "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
-                                    checked_arg.ty,
-                                    arg.span
-                                )
-                            }
-                            checked_args.push(checked_arg);
-                        }
-                        let kind = TirExprKind::DirectCall {
-                            callee: symbol,
-                            args: checked_args,
-                        };
-                        return TirExpr::new(kind, ty);
-                    }
-                }
-                let checked_callee = callee.type_check_rvalue(tu, tf, None);
-                match checked_callee.ty.as_ref() {
-                    QualType::Pointer(f) => {
+                let (arg_types, return_type) = match checked_callee.ty.as_ref() {
+                    QualType::Pointer(f)
                         if let QualType::Function {
                             arg_types,
                             return_type,
-                        } = f.as_ref()
-                        {
-                            let mut checked_args = vec![];
-                            let ty = return_type.clone();
-                            for (arg, expected_arg_type) in
-                                args.iter().zip(arg_types.clone().iter())
-                            {
-                                let checked_arg =
-                                    arg.type_check_rvalue(tu, tf, Some(expected_arg_type.clone()));
-                                if checked_arg.ty != *expected_arg_type {
-                                    die!(
-                                        "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
-                                        checked_arg.ty,
-                                        arg.span
-                                    )
-                                }
-                                checked_args.push(checked_arg);
-                            }
-                            let kind = TirExprKind::IndirectCall {
-                                callee: Box::new(checked_callee),
-                                args: checked_args,
-                            };
-                            return TirExpr::new(kind, ty);
-                        }
+                        } = f.as_ref() =>
+                    {
+                        (arg_types, return_type)
                     }
-                    _ => {}
+                    QualType::Function {
+                        arg_types,
+                        return_type,
+                    } => (arg_types, return_type),
+                    _ => die!(
+                        "Cannot call type {} as it is not a function or a pointer to a function: {span}",
+                        checked_callee.ty
+                    ),
+                };
+
+                let mut checked_args = vec![];
+                for (arg, expected_arg_type) in args.iter().zip(arg_types.clone().iter()) {
+                    let checked_arg = arg.type_check_rvalue(ctx, Some(expected_arg_type.clone()));
+                    if checked_arg.ty != *expected_arg_type {
+                        die!(
+                            "Incorrect argument passed to function. Expected {expected_arg_type} but got {}: {}",
+                            checked_arg.ty,
+                            arg.span
+                        )
+                    }
+                    checked_args.push(checked_arg);
                 }
-                die!(
-                    "Cannot call type {} as it is not a function or a pointer to a function: {span}",
-                    checked_callee.ty
-                );
+
+                let ty = return_type.clone();
+                let kind = TirExprKind::Call {
+                    callee: Box::new(checked_callee),
+                    args: checked_args,
+                };
+                TirExpr::new(kind, ty)
             }
         }
     }

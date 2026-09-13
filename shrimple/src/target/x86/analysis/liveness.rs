@@ -50,7 +50,7 @@ impl x86Function {
                 LIVE_OUT
                     .get_mut(&curr_id)
                     .unwrap()
-                    .union_eq(&LIVE_IN[&succ_id]);
+                    .union_eq(&LIVE_IN[succ_id]);
             }
 
             // If LIVE_IN[s] changed, predecessors need to be recomputed since their LIVE_OUTs

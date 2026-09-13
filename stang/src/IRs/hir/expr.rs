@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::common::{Spanned, RcString};
+use crate::common::{RcString, Spanned};
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]

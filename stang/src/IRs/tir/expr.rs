@@ -41,12 +41,8 @@ pub enum TirExprKind {
         target_ty: Rc<QualType>,
         expr: Box<TirExpr>,
     },
-    IndirectCall {
+    Call {
         callee: Box<TirExpr>,
-        args: Vec<TirExpr>,
-    },
-    DirectCall {
-        callee: Symbol,
         args: Vec<TirExpr>,
     },
 }

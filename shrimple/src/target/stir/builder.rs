@@ -6,8 +6,8 @@ use crate::{
 
 pub type IRLabel = Label<IRInstr>;
 pub type IRBasicBlock = BasicBlock<IRInstr>;
-pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType>;
-pub type IRModule = ModuleBuilder<IRInstr, IRValue, IRType>;
+pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType, ()>;
+pub type IRModule = ModuleBuilder<IRInstr, IRValue, IRType, ()>;
 
 impl IRFunction {
     pub fn nextReg(&mut self) -> VReg {
@@ -19,7 +19,7 @@ impl IRFunction {
     pub fn print(&self, include_comments: bool) {
         println!(
             "{}({}):",
-            self.name,
+            self.symbol,
             self.args
                 .iter()
                 .map(|(name, ty)| format!("{name}: {ty}"))

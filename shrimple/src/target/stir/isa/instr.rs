@@ -15,51 +15,52 @@ use IRInstr::*;
 
 // Extra imports:
 use crate::target::stir::isa::*;
+use crate::common::ModuleSymbol;
 use crate::target::stir::builder::*;
 
 #[derive(Debug, Clone)]
 pub enum IRInstr {
-    /// ty, dst, lhs, rhs
+    /// add: ty, dst, lhs, rhs
     Add(IRType, IRValue, IRValue, IRValue),
-    /// ty, dst
+    /// alloca: ty, dst
     Alloca(IRType, IRValue),
-    /// val, truebb, falsebb
+    /// br: val, truebb, falsebb
     Br(IRValue, IRLabel, IRLabel),
-    /// ty, dst, callee, args
-    Call(IRType, IRValue, String, SmallVec<[IRValue; 4]>),
-    /// s
+    /// call: ty, dst, callee, args
+    Call(IRType, IRValue, IRValue, SmallVec<[IRValue; 4]>),
+    /// comment: s
     Comment(String),
-    /// ty, dst, rs1
+    /// copy: ty, dst, rs1
     Copy(IRType, IRValue, IRValue),
-    /// dst, base, elem_ty, idx
+    /// getaddr: dst, base, elem_ty, idx
     Getaddr(IRValue, IRValue, IRType, IRValue),
-    /// cmp, ty, dst, lhs, rhs
+    /// icmp: cmp, ty, dst, lhs, rhs
     Icmp(CmpOp, IRType, IRValue, IRValue, IRValue),
-    /// to
+    /// jmp: to
     Jmp(IRLabel),
-    /// ty, ptr, dst
+    /// load: ty, ptr, dst
     Load(IRType, IRValue, IRValue),
-    /// ty, val
+    /// ret: ty, val
     Ret(IRType, IRValue),
-    /// 
+    /// retv: 
     Retv,
-    /// ty, dst, lhs, rhs
+    /// sdiv: ty, dst, lhs, rhs
     Sdiv(IRType, IRValue, IRValue, IRValue),
-    /// to_ty, dst, from_ty, rs1
+    /// sext: to_ty, dst, from_ty, rs1
     Sext(IRType, IRValue, IRType, IRValue),
-    /// ty, dst, lhs, rhs
+    /// smul: ty, dst, lhs, rhs
     Smul(IRType, IRValue, IRValue, IRValue),
-    /// ty, ptr, rs1
+    /// store: ty, ptr, rs1
     Store(IRType, IRValue, IRValue),
-    /// ty, dst, lhs, rhs
+    /// sub: ty, dst, lhs, rhs
     Sub(IRType, IRValue, IRValue, IRValue),
-    /// to_ty, dst, from_ty, rs1
+    /// trunc: to_ty, dst, from_ty, rs1
     Trunc(IRType, IRValue, IRType, IRValue),
-    /// ty, dst, lhs, rhs
+    /// udiv: ty, dst, lhs, rhs
     Udiv(IRType, IRValue, IRValue, IRValue),
-    /// ty, dst, lhs, rhs
+    /// umul: ty, dst, lhs, rhs
     Umul(IRType, IRValue, IRValue, IRValue),
-    /// to_ty, dst, from_ty, rs1
+    /// zext: to_ty, dst, from_ty, rs1
     Zext(IRType, IRValue, IRType, IRValue),
 }
 
@@ -71,7 +72,7 @@ impl std::fmt::Display for IRInstr {
             Br(val, truebb, falsebb) => f.write_fmt(format_args!("br {val}, {truebb}, {falsebb}")),
             Call(ty, dst, callee, args) => {
               let args_str = args.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(",");
-              f.write_fmt(format_args!("{dst} = {callee}({args_str})"))
+              f.write_fmt(format_args!("{dst} = call {callee}({args_str})"))
           }
       ,
             Comment(s) => f.write_fmt(format_args!("; {s}")),
@@ -79,13 +80,13 @@ impl std::fmt::Display for IRInstr {
             Getaddr(dst, base, elem_ty, idx) => f.write_fmt(format_args!("{dst} = getaddr {base} offset by {elem_ty}, {idx}")),
             Icmp(cmp, ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = icmp {cmp} {ty}, {lhs}, {rhs}")),
             Jmp(to) => f.write_fmt(format_args!("jmp {to}")),
-            Load(ty, ptr, dst) => f.write_fmt(format_args!("{dst} = load {ty} from {ptr}")),
+            Load(ty, ptr, dst) => f.write_fmt(format_args!("{dst} = load {ty} from ptr {ptr}")),
             Ret(ty, val) => f.write_fmt(format_args!("ret {ty}, {val}")),
             Retv => f.write_fmt(format_args!("retv")),
             Sdiv(ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = sdiv {ty}, {lhs}, {rhs}")),
             Sext(to_ty, dst, from_ty, rs1) => f.write_fmt(format_args!("{dst} = sext {from_ty} {rs1} to {to_ty}")),
             Smul(ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = smul {ty}, {lhs}, {rhs}")),
-            Store(ty, ptr, rs1) => f.write_fmt(format_args!("store {ty} {rs1} into {ptr}")),
+            Store(ty, ptr, rs1) => f.write_fmt(format_args!("store {ty} {rs1} into ptr {ptr}")),
             Sub(ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = sub {ty}, {lhs}, {rhs}")),
             Trunc(to_ty, dst, from_ty, rs1) => f.write_fmt(format_args!("{dst} = trunc {from_ty} {rs1} to {to_ty}")),
             Udiv(ty, dst, lhs, rhs) => f.write_fmt(format_args!("{dst} = udiv {ty}, {lhs}, {rhs}")),

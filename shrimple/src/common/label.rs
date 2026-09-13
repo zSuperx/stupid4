@@ -15,15 +15,7 @@ impl<I> Label<I> {
 
 impl<I> PartialOrd for Label<I> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.0.partial_cmp(&other.0) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        match self.1.partial_cmp(&other.1) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        self.2.partial_cmp(&other.2)
+        Some(self.cmp(other))
     }
 }
 
@@ -36,7 +28,7 @@ impl<I> Ord for Label<I> {
 impl<I> Copy for Label<I> {}
 impl<I> Clone for Label<I> {
     fn clone(&self) -> Self {
-        Self(self.0, self.1, self.2)
+        *self
     }
 }
 

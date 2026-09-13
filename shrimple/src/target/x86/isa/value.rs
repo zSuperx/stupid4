@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 use smallvec::{SmallVec, smallvec};
 
+use crate::common::ModuleSymbol;
+
 use super::reg::*;
 use super::types::*;
 
@@ -50,6 +52,7 @@ pub enum x86Value {
         ty: LLType,
     },
     CC(RFLAG),
+    Sym(ModuleSymbol),
 }
 
 impl x86Value {
@@ -77,7 +80,6 @@ impl x86Value {
 
     pub fn getReg(&self) -> SmallVec<[Reg; 2]> {
         match self {
-            x86Value::Imm(_) => smallvec![],
             x86Value::Reg { name, .. } => smallvec![*name],
             x86Value::Mem { base, index, .. } => {
                 let mut ret = smallvec![*base];
@@ -86,17 +88,14 @@ impl x86Value {
                 }
                 ret
             }
-            x86Value::CC(..) => smallvec![],
+            _ => smallvec![],
         }
     }
 
     pub fn rewriteReg(&mut self, old: Reg, new: Reg) {
         match self {
-            x86Value::Imm(_) => {}
-            x86Value::Reg { name, .. } => {
-                if old == *name {
-                    *name = new;
-                }
+            x86Value::Reg { name, .. } if old == *name => {
+                *name = new;
             }
             x86Value::Mem { base, index, .. } => {
                 if *base == old {
@@ -108,7 +107,7 @@ impl x86Value {
                     *inner = new;
                 }
             }
-            x86Value::CC(..) => {}
+            _ => {}
         }
     }
 
@@ -140,9 +139,9 @@ impl x86Value {
 
     pub fn ty(&self) -> LLType {
         match self {
-            x86Value::CC(_) | x86Value::Imm(_) => panic!("{self} value does not have a size"),
             x86Value::Reg { name, ty } => *ty,
             x86Value::Mem { ty, .. } => *ty,
+            _ => panic!("{self} value does not have a type"),
         }
     }
 }
@@ -151,6 +150,7 @@ impl Display for x86Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             x86Value::Imm(i) => i.fmt(f),
+            x86Value::Sym(s) => s.fmt(f),
             x86Value::Reg { name, ty } => name.sized_print(f, ty.bits()),
             x86Value::Mem {
                 base,

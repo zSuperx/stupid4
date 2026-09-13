@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, OnceLock};
 
-use crate::IRs::hir::{HirFunction, HirObj};
+use crate::IRs::hir::*;
 use crate::IRs::tir::{TirExpr, TirExprKind, TirFunction, TirStmt};
 use crate::common::*;
+use crate::parser::ParsedProgram;
+use crate::sema::CompilerContext;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -21,44 +23,7 @@ pub struct GlobalState {
     pub raw_types: Pool<RawType>,
 
     pub symbols: Pool<String>,
-
     pub symbol_counter: usize,
-}
-
-#[derive(Debug)]
-pub struct FunctionContext {
-    pub name: Spanned<RcString>,
-
-    pub symbol: Symbol,
-
-    pub return_type: Rc<QualType>,
-
-    /// Tracks string -> symbol mappings. Looking up a symbol by its string name starts at the inner
-    /// most (current) scope, going up in scopes on failure
-    pub env: Env<RcString, Symbol>,
-
-    /// Used to codegen continue/break
-    pub loop_labels: Vec<LoopLabels>,
-
-    /// Use in sema to validate use of continue/break
-    pub loop_depth: usize,
-
-    pub symbol_table: HashMap<Symbol, SymbolInfo>,
-
-    pub body: Option<TirStmt>,
-}
-
-#[derive(Debug, Default)]
-pub struct TranslationUnit {
-    /// Global string to symbol map
-    ///
-    /// Contains names of functions and global variables
-    pub top_level_scope: HashMap<RcString, Symbol>,
-
-    pub global_symbol_table: HashMap<Symbol, SymbolInfo>,
-
-    /// Distinguishes shadowed vars
-    symbol_counter: usize,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Debug)]
@@ -71,37 +36,95 @@ impl std::fmt::Display for Symbol {
 }
 
 pub fn next_symbol(name: &str) -> Symbol {
-    let s = add_str(&name.to_string());
+    let s = add_str(name);
     let state = global_state();
     state.symbol_counter += 1;
     Symbol(s, state.symbol_counter - 1)
 }
 
-impl TranslationUnit {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    // pub fn lookup_symbol(&mut self, symbol: Symbol) -> &SymbolInfo {
-    //     match self.current_function.symbol_table.get(&symbol) {
-    //         Some(i) => i,
-    //         None => die!("Symbol not found: {symbol}"),
-    //     }
-    // }
-    //
-
+impl CompilerContext {
     /// Reads all parsed objects and registers global symbols and global types.
     ///
     /// Without this, the user would have to resort to C-style forward-declarations to refer to types
     /// that were declared physically later in the file.
-    pub fn resolve_top_level(&mut self, objects: &Vec<Spanned<HirObj>>) {
-        for obj in objects {
-            self.resolve_global_types(obj);
+    pub fn resolve_top_level(&mut self, program: &ParsedProgram) {
+        for struct_ in program.structs.iter() {
+            self.resolve_global_types(struct_);
         }
 
-        for obj in objects {
-            self.resolve_global_names(obj);
+        for global in program.globals.iter() {
+            self.resolve_global_variables(global);
         }
+
+        for function in program.functions.iter() {
+            self.resolve_global_functions(function);
+        }
+    }
+
+    /// Resolves all types at the top-level scope. This is so future invocations of [`resolve_type`]
+    /// actually have something to resolve to
+    fn resolve_global_types(&mut self, Spanned { inner: struct_, .. }: &Spanned<HirStruct>) {
+        let HirStruct { name, fields } = struct_;
+
+        let s = qtype(&QualType::Struct {
+            name: name.inner.clone(),
+            fields: fields
+                .iter()
+                .map(|(n, t)| (n.inner.clone(), self.qualify_type(&t.inner)))
+                .collect(),
+        });
+        global_state().type_names.insert(name.inner.clone(), s);
+    }
+
+    /// Resolves all functions at the top-level scope. This is what allows functions to know they
+    /// are referring to one another.
+    fn resolve_global_functions(
+        &mut self,
+        Spanned {
+            inner: function, ..
+        }: &Spanned<HirFunction>,
+    ) {
+        let HirFunction {
+            name,
+            return_type: returns,
+            args,
+            ..
+        } = function;
+        let mut arg_types = vec![];
+        for (_, ty) in args.iter() {
+            let resolved_ty = self.qualify_type(&ty.inner);
+            arg_types.push(resolved_ty);
+        }
+        let return_ty = self.qualify_type(&returns.inner);
+        let function_ty = QualType::Function {
+            arg_types,
+            return_type: return_ty,
+        };
+        let ty = qtype(&function_ty);
+        let symbol = next_symbol(&name.inner);
+        let module_symbol = self.builder.add_symbol(name.inner.to_string());
+        self.top_level_scope
+            .insert(name.inner.clone(), symbol.clone());
+        self.symbol_table.insert(
+            symbol.clone(),
+            SymbolInfo {
+                symbol,
+                raw_name: name.clone(),
+                ty,
+                kind: SymbolKind::Function,
+                address_taken: false,
+                value: Some(IRValue::Sym(module_symbol)),
+            },
+        );
+    }
+
+    fn resolve_global_variables(
+        &mut self,
+        Spanned {
+            inner: variable, ..
+        }: &Spanned<HirGlobal>,
+    ) {
+        // TODO: implement this
     }
 
     /// Resolves a Type::Unresolved(..) into a Type
@@ -127,68 +150,6 @@ impl TranslationUnit {
                 };
                 qtype(&ty)
             }
-        }
-    }
-
-    /// Resolves all types at the top-level scope. This is so future invocations of [`resolve_type`]
-    /// actually have something to resolve to
-    fn resolve_global_types(&mut self, Spanned { inner: obj, .. }: &Spanned<HirObj>) {
-        match obj {
-            HirObj::Fn(..) => {}
-            HirObj::Global { .. } => {}
-            HirObj::Struct { name, fields } => {
-                let s = qtype(&QualType::Struct {
-                    name: name.inner.clone(),
-                    fields: fields
-                        .iter()
-                        .map(|(n, t)| (n.inner.clone(), self.qualify_type(&t.inner)))
-                        .collect(),
-                });
-                global_state().type_names.insert(name.inner.clone(), s);
-            }
-        }
-    }
-
-    /// Resolves all identifiers at the top-level scope. This includes functions and global variables,
-    /// and is what allows them to know they are referring to one another.
-    fn resolve_global_names(&mut self, Spanned { inner: obj, .. }: &Spanned<HirObj>) {
-        match obj {
-            HirObj::Fn(HirFunction {
-                name,
-                return_type: returns,
-                args,
-                ..
-            }) => {
-                let mut arg_types = vec![];
-                for (_, ty) in args.iter() {
-                    let resolved_ty = self.qualify_type(&ty.inner);
-                    arg_types.push(resolved_ty);
-                }
-                let return_ty = self.qualify_type(&returns.inner);
-                let function_ty = QualType::Function {
-                    arg_types,
-                    return_type: return_ty,
-                };
-                let ty = qtype(&function_ty);
-                let symbol = next_symbol(&name.inner);
-                self.top_level_scope
-                    .insert(name.inner.clone(), symbol.clone());
-                self.global_symbol_table.insert(
-                    symbol.clone(),
-                    SymbolInfo {
-                        symbol,
-                        raw_name: name.clone(),
-                        ty,
-                        kind: SymbolKind::Function,
-                        address_taken: false,
-                        value: None,
-                    },
-                );
-            }
-            HirObj::Global { .. } => {
-                todo!()
-            }
-            HirObj::Struct { .. } => {}
         }
     }
 }
@@ -223,40 +184,7 @@ impl GlobalState {
     }
 }
 
-pub fn lookup_ident<'a, 'b, 'c>(
-    tu: &'a mut TranslationUnit,
-    tf: &'b mut TirFunction,
-    ident: &RcString,
-) -> Option<&'c SymbolInfo>
-where
-    'a: 'c,
-    'b: 'c,
-{
-    let Some(symbol) = tf.env.get(&ident) else {
-        return None;
-    };
-    Some(lookup_symbol(tu, tf, symbol))
-}
-
-pub fn lookup_symbol<'a, 'b, 'c>(
-    tu: &'a mut TranslationUnit,
-    tf: &'b mut TirFunction,
-    symbol: Symbol,
-) -> &'c SymbolInfo
-where
-    'a: 'c,
-    'b: 'c,
-{
-    match tf.symbol_table.get(&symbol) {
-        Some(i) => i,
-        None => tu
-            .global_symbol_table
-            .get(&symbol)
-            .expect("Could not find symbol: {symbol}"),
-    }
-}
-
-/// `continue` jumps to COND_BB and `break` jumps to END_BB
+/// `continue` jumps to `cond_block` and `break` jumps to `end_block`
 #[derive(Debug, Clone, Copy)]
 pub struct LoopLabels {
     pub cond_block: IRLabel,
@@ -279,14 +207,14 @@ pub struct SymbolInfo {
     pub kind: SymbolKind,
 
     /// Indicates whether the user captured the address of this variable using the & operator
-    /// This is used to prevent PHI promotion, and leaves the associated stack slot as a memory
-    /// location
+    /// This is used to prevent PHI promotion, and leaves the slot as an addressable location
     pub address_taken: bool,
 
     pub value: Option<IRValue>,
 }
 
 impl SymbolInfo {
+    /// Creates an AddrOf Typed AST node. This is useful for ad-hoc AST transformations
     pub fn create_addr_of(&self) -> TirExpr {
         let ty = self.ty.clone();
         let kind = TirExprKind::AddrOf(self.symbol.clone());

@@ -19,67 +19,69 @@ use crate::target::x86::builder::*;
 
 #[derive(Debug, Clone)]
 pub enum x86Instr {
-    /// rs1, rs2
+    /// add: rs1, rs2
     Add(x86Value, x86Value),
-    /// dst, rs1
+    /// call: rs1
+    Call(x86Value),
+    /// cmove: dst, rs1
     Cmove(x86Value, x86Value),
-    /// dst, rs1
+    /// cmovg: dst, rs1
     Cmovg(x86Value, x86Value),
-    /// dst, rs1
+    /// cmovge: dst, rs1
     Cmovge(x86Value, x86Value),
-    /// dst, rs1
+    /// cmovl: dst, rs1
     Cmovl(x86Value, x86Value),
-    /// dst, rs1
+    /// cmovle: dst, rs1
     Cmovle(x86Value, x86Value),
-    /// dst, rs1
+    /// cmovne: dst, rs1
     Cmovne(x86Value, x86Value),
-    /// rs1, rs2
+    /// cmp: rs1, rs2
     Cmp(x86Value, x86Value),
-    /// s
+    /// comment: s
     Comment(String),
-    /// rs1, rs2
+    /// idiv: rs1, rs2
     Idiv(x86Value, x86Value),
-    /// rs1, rs2
+    /// imul: rs1, rs2
     Imul(x86Value, x86Value),
-    /// to
+    /// je: to
     Je(x86Label),
-    /// to
+    /// jg: to
     Jg(x86Label),
-    /// to
+    /// jge: to
     Jge(x86Label),
-    /// to
+    /// jl: to
     Jl(x86Label),
-    /// to
+    /// jle: to
     Jle(x86Label),
-    /// to
+    /// jmp: to
     Jmp(x86Label),
-    /// to
+    /// jne: to
     Jne(x86Label),
-    /// to
+    /// jno: to
     Jno(x86Label),
-    /// to
+    /// jnz: to
     Jnz(x86Label),
-    /// to
+    /// jo: to
     Jo(x86Label),
-    /// to
+    /// jz: to
     Jz(x86Label),
-    /// dst, rs1
+    /// lea: dst, rs1
     Lea(x86Value, x86Value),
-    /// dst, rs1
+    /// mov: dst, rs1
     Mov(x86Value, x86Value),
-    /// dst, rs1
+    /// movsx: dst, rs1
     Movsx(x86Value, x86Value),
-    /// dst, rs1
+    /// movsxd: dst, rs1
     Movsxd(x86Value, x86Value),
-    /// dst, rs1
+    /// movzx: dst, rs1
     Movzx(x86Value, x86Value),
-    /// dst
+    /// pop: dst
     Pop(x86Value),
-    /// rs1
+    /// push: rs1
     Push(x86Value),
-    /// 
+    /// ret: 
     Ret,
-    /// rs1, rs2
+    /// sub: rs1, rs2
     Sub(x86Value, x86Value),
 }
 
@@ -87,6 +89,7 @@ impl std::fmt::Display for x86Instr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Add(rs1, rs2) => f.write_fmt(format_args!("add {rs1}, {rs2}")),
+            Call(rs1) => f.write_fmt(format_args!("call {rs1}")),
             Cmove(dst, rs1) => f.write_fmt(format_args!("cmove {dst}, {rs1}")),
             Cmovg(dst, rs1) => f.write_fmt(format_args!("cmovg {dst}, {rs1}")),
             Cmovge(dst, rs1) => f.write_fmt(format_args!("cmovge {dst}, {rs1}")),
@@ -127,6 +130,7 @@ impl InstructionTrait for x86Instr {
     fn uses(&self) -> SmallVec<[&Self::Val; 4]> {
         match self {
             Add(rs1, rs2) => smallvec![rs1, rs2],
+            Call(rs1) => smallvec![rs1],
             Cmove(dst, rs1) => smallvec![rs1],
             Cmovg(dst, rs1) => smallvec![rs1],
             Cmovge(dst, rs1) => smallvec![rs1],
@@ -163,6 +167,7 @@ impl InstructionTrait for x86Instr {
     fn defs(&self) -> SmallVec<[&Self::Val; 4]> {
         match self {
             Add(rs1, rs2) => smallvec![rs1],
+            Call(rs1) => smallvec![&RAX],
             Cmove(dst, rs1) => smallvec![dst],
             Cmovg(dst, rs1) => smallvec![dst],
             Cmovge(dst, rs1) => smallvec![dst],
@@ -199,6 +204,7 @@ impl InstructionTrait for x86Instr {
     fn is_terminator(&self) -> bool {
         match self {
             Add(rs1, rs2) => false,
+            Call(rs1) => false,
             Cmove(dst, rs1) => false,
             Cmovg(dst, rs1) => false,
             Cmovge(dst, rs1) => false,

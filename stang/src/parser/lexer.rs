@@ -1,5 +1,5 @@
 use super::token::Token;
-use crate::common::{Span, Spanned, RcString};
+use crate::common::{RcString, Span, Spanned};
 use crate::die;
 use crate::translation_unit::{SOURCE, add_str, source};
 
@@ -158,7 +158,7 @@ impl Lexer {
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             "sizeof" => Token::Sizeof,
-            _ => Token::Ident(add_str(&raw.to_string())),
+            _ => Token::Ident(add_str(raw)),
         };
 
         Some(self.make_token(kind, start))
@@ -187,7 +187,7 @@ impl Lexer {
         let Ok(raw) = str::from_utf8(source().get(start + 1..self.cursor - 1)?) else {
             die!("Non-utf8 characters are not supported: {}", self.last_span);
         };
-        let token = Token::Str(add_str(&raw.to_string()));
+        let token = Token::Str(add_str(raw));
 
         Some(self.make_token(token, start))
     }

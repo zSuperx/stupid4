@@ -46,10 +46,10 @@ impl From<usize> for Reg {
     }
 }
 
-impl Into<usize> for Reg {
-    fn into(self) -> usize {
+impl From<Reg> for usize {
+    fn from(other: Reg) -> usize {
         use Reg::*;
-        match self {
+        match other {
             A => 0,
             B => 1,
             C => 2,
