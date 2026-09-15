@@ -100,9 +100,9 @@ impl<I: InstructionTrait, V, T, M> FunctionBuilder<I, V, T, M> {
     pub fn verify(&mut self, default_return: Option<I>) -> bool {
         !self.dfs_short_circuit(|builder, curr_id| {
             let block = builder.blocks.get_mut(&curr_id).unwrap();
-            if block.terminator.is_none() {
+            if block.terminator().is_none() {
                 match default_return.as_ref() {
-                    Some(i) => block.terminator = Some(i.clone()),
+                    Some(i) => block.instructions.push(i.clone()),
                     None => return true,
                 }
             }
@@ -208,23 +208,19 @@ impl<I: InstructionTrait, V, T, M> FunctionBuilder<I, V, T, M> {
     }
 
     pub fn emit(&mut self, instr: I) {
-        let basic_block = self.blocks.get_mut(&self.cursor).unwrap();
-        if basic_block.terminator.is_some() {
+        let block = self.blocks.get_mut(&self.cursor).unwrap();
+        if block.terminator().is_some() {
             return;
         }
-        if instr.is_terminator() {
-            basic_block.terminator = Some(instr);
-        } else {
-            basic_block.instructions.push(instr);
-        }
+        block.instructions.push(instr);
     }
 
     pub fn isCurrentTerminated(&self) -> bool {
-        self.blocks[&self.cursor].terminator.is_some()
+        self.blocks[&self.cursor].terminator().is_some()
     }
 
     pub fn isTerminated(&self, this: Label<I>) -> bool {
-        self.blocks[&this].terminator.is_some()
+        self.blocks[&this].terminator().is_some()
     }
 
     pub fn dfs_short_circuit(

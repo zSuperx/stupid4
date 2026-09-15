@@ -1,8 +1,10 @@
+use smallvec::SmallVec;
+
 use crate::{
-    common::{BasicBlock, FunctionBuilder, Label, ModuleBuilder},
+    common::{BasicBlock, FunctionBuilder, InstructionTrait, Label, ModuleBuilder},
     target::{
         stir::{builder::IRFunction, isa::*},
-        x86::isa::{LLType, Reg, x86Instr, x86Value},
+        x86::isa::*,
     },
 };
 use std::collections::HashMap;
@@ -18,22 +20,24 @@ impl x86Function {
     pub fn lower(stir_function: &IRFunction) -> x86Function {
         // Create the function
         let rty = LLType::fromIRType(stir_function.getReturnType());
-        let mut new_function =
-            x86Function::new(stir_function.name.clone(), rty, Metadata::default());
-        new_function.setRegCount(stir_function.getRegCount());
+        let mut mcf = x86Function::new(stir_function.name.clone(), rty, Metadata::default());
+        mcf.setRegCount(stir_function.getRegCount());
 
         // Handle ABI impl
-        new_function.resolve_args(stir_function);
+        mcf.resolve_args(stir_function);
 
         // This creates the builder
-        new_function.translate(stir_function);
+        mcf.translate(stir_function);
 
         // Legalizes instructions that may have been mangled by conforming to the ABI
-        new_function.legalize();
+        mcf.legalize();
 
-        // Opt passes mutate the builder
-        new_function.merge_degenerate_jumps();
-        new_function
+        if mcf.check_frame_emission() {
+            mcf.emit_frame();
+        }
+
+        mcf.merge_degenerate_jumps();
+        mcf
     }
 }
 
@@ -43,8 +47,8 @@ pub type x86Function = FunctionBuilder<x86Instr, x86Value, LLType, Metadata>;
 pub type x86Module = ModuleBuilder<x86Instr, x86Value, LLType, Metadata>;
 
 impl x86Function {
-    pub fn nextReg(&mut self) -> Reg {
-        let ret = Reg::Virt(self.reg_count);
+    pub fn nextReg(&mut self, ty: LLType) -> Register {
+        let ret = Register::Virt(self.reg_count, ty);
         self.reg_count += 1;
         ret
     }
@@ -60,11 +64,39 @@ impl x86Function {
                 }
                 println!("\t{i}");
             }
-            if let Some(term) = &block.terminator {
-                println!("\t{term}");
-            } else {
+            if block.terminator().is_none() {
                 println!("\t; !! (missing terminator)");
             }
         });
+    }
+}
+
+impl x86Instr {
+    pub fn regUses(&self) -> SmallVec<[&Register; 4]> {
+        let mut ret = SmallVec::new();
+        for value in self.uses() {
+            match value {
+                x86Value::Reg(r) => ret.push(r),
+                x86Value::Mem(AddressMode::Direct { base, index, .. }) => {
+                    ret.push(base);
+                    if let Some(index) = index {
+                        ret.push(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        ret
+    }
+
+    pub fn regDefs(&self) -> SmallVec<[&Register; 4]> {
+        let mut ret = SmallVec::new();
+        for value in self.defs() {
+            match value {
+                x86Value::Reg(r) => ret.push(r),
+                _ => {}
+            }
+        }
+        ret
     }
 }

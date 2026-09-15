@@ -4,6 +4,7 @@ use shrimple::x86Function;
 use crate::IRs::tir::TirFunction;
 use crate::ast::QualType;
 use crate::common::{Scopes, Spanned};
+use crate::die;
 use crate::driver::args::*;
 use crate::parser::parse_file;
 use crate::sema::CompilerContext;
@@ -88,7 +89,7 @@ pub fn run() {
                 println!()
             }
         }
-        Action::CompileOnly => todo!(),
-        Action::AssembleAndLink => todo!(),
+        Action::CompileOnly => die!("TODO: Compile"),
+        Action::AssembleAndLink => die!("TODO: Assemble + Link"),
     }
 }

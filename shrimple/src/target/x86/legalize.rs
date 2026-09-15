@@ -14,7 +14,8 @@ impl x86Function {
             let mut curr = self_.blocks.remove(&curr_id).unwrap();
             curr.rewrite(|instr| match instr {
                 Mov(mem1, mem2) if mem1.is_mem() && mem2.is_mem() => {
-                    let tmp = x86Value::reg(self_.nextReg(), mem1.ty());
+                    assert_eq!(mem1.get_type(), mem2.get_type(), "Memory operands are of different sizes");
+                    let tmp = Reg(self_.nextReg(mem1.get_type()));
                     RewriteAction::Replace(vec![Mov(tmp, *mem2), Mov(*mem1, tmp)])
                 }
                 _ => RewriteAction::Keep,

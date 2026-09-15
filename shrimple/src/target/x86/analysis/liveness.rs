@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use bitset::BitSet;
 
-use crate::{
-    common::InstructionTrait,
-    target::x86::builder::{x86Function, x86Label},
-};
+use crate::target::x86::builder::{x86Function, x86Label};
 
 impl x86Function {
     /// Performs liveness analysis and returns a ???
@@ -31,17 +28,13 @@ impl x86Function {
             for i in curr.instructions.iter().rev() {
                 // Iterate through all defs of an instruction
                 // If we find a def, it is not LIVE_IN
-                for d in i.defs() {
-                    for reg in d.getReg() {
-                        live_in.remove(reg.into());
-                    }
+                for reg in i.regDefs() {
+                    live_in.remove(reg.into());
                 }
 
                 // Iterate through all uses of an instruction
-                for u in i.uses() {
-                    for reg in u.getReg() {
-                        live_in.insert(reg.into());
-                    }
+                for reg in i.regUses() {
+                    live_in.insert(reg.into());
                 }
             }
 

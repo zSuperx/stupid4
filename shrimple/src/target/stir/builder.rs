@@ -35,9 +35,7 @@ impl IRFunction {
                 }
                 println!("\t{i}");
             }
-            if let Some(term) = &block.terminator {
-                println!("\t{term}");
-            } else {
+            if block.terminator().is_none() {
                 println!("\t; !! (missing terminator)");
             }
         });

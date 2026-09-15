@@ -10,7 +10,7 @@ impl x86Function {
             // We loop each block to keep folding in children
             loop {
                 let curr = self_.blocks.get(&curr_id).unwrap();
-                if let Some(Jmp(target_id)) = curr.terminator
+                if let Some(&Jmp(target_id)) = curr.terminator()
                     && curr.fallthrough == Some(target_id)
                     && target_id != curr_id
                 {
@@ -26,10 +26,10 @@ impl x86Function {
                     // curr inherits the rest of target's instructions, successors, fallthrough, and terminator
                     let curr = self_.blocks.get_mut(&curr_id).unwrap();
                     curr.successors = target.successors;
+                    curr.delete_terminator();
                     curr.instructions
                         .push(Comment(format!("\r; BB: {target_id}")));
                     curr.instructions.append(&mut target.instructions);
-                    curr.terminator = target.terminator;
                     curr.fallthrough = target.fallthrough;
                 } else {
                     break;

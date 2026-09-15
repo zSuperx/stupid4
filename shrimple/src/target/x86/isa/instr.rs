@@ -15,6 +15,7 @@ use x86Instr::*;
 
 // Extra imports:
 use crate::target::x86::isa::*;
+use x86Value::*;
 use crate::target::x86::builder::*;
 
 #[derive(Debug, Clone)]
@@ -167,7 +168,7 @@ impl InstructionTrait for x86Instr {
     fn defs(&self) -> SmallVec<[&Self::Val; 4]> {
         match self {
             Add(rs1, rs2) => smallvec![rs1],
-            Call(rs1) => smallvec![&RAX],
+            Call(rs1) => smallvec![&Reg(RAX)],
             Cmove(dst, rs1) => smallvec![dst],
             Cmovg(dst, rs1) => smallvec![dst],
             Cmovge(dst, rs1) => smallvec![dst],

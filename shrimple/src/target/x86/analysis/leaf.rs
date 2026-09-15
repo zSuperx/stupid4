@@ -9,7 +9,7 @@ impl x86Function {
         let mut exitpoints = HashSet::new();
         self.dfs(|self_, curr_id| {
             let curr = self_.blocks.get(&curr_id).unwrap();
-            if let Some(x86Instr::Ret) = curr.terminator.as_ref() {
+            if let Some(x86Instr::Ret) = curr.terminator() {
                 exitpoints.insert(curr_id);
             };
         });

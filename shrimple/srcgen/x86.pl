@@ -105,12 +105,13 @@ my $isa = {
     call => {
       args => [ "rs1:$VAL" ],
       uses => [ "rs1" ],
-      defs => [ "&RAX" ],
+      defs => [ "&Reg(RAX)" ],
     },
   },
 
   extraCode => [
     "use crate::target::x86::isa::*;",
+    "use x86Value::*;",
     "use crate::target::x86::builder::*;",
   ],
   specFile => __FILE__,

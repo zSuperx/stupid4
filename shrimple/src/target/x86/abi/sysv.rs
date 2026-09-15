@@ -7,7 +7,15 @@ impl x86Function {
     /// Scans the arguments of `stir_function` and maps them to physical registers by populating the
     /// `self.v2p` map. The mapping follows the x86_64 System V ABI specification.
     pub(crate) fn resolve_args(&mut self, stir_function: &IRFunction) {
-        let mut registers = [Reg::DI, Reg::SI, Reg::D, Reg::C, Reg::R8, Reg::R9].iter();
+        let mut registers = [
+            Register::RDI,
+            Register::RSI,
+            Register::RDX,
+            Register::RCX,
+            Register::R8,
+            Register::R9,
+        ]
+        .iter();
         let mut used_stack_bytes = 0;
         let mut curr_reg = registers.next();
         // let mut new_args = vec![];
@@ -19,10 +27,12 @@ impl x86Function {
                 // If no registers are left, the argument shall live at [rbp + ...]
                 let llty = LLType::fromIRType(arg_ty);
                 let dst = match curr_reg {
-                    Some(r) => x86Value::reg(*r, llty),
-                    None => {
-                        x86Value::memDisp(Reg::BP, 16 + (8 * i.saturating_sub(6) as i128), llty)
-                    }
+                    Some(r) => x86Value::Reg(*r),
+                    None => x86Value::memDisp(
+                        Register::BP,
+                        16 + (8 * i.saturating_sub(6) as i128),
+                        llty,
+                    ),
                 };
                 self.meta.v2p.insert(*arg_val, dst);
                 curr_reg = registers.next();
@@ -37,12 +47,28 @@ impl x86Function {
         let IRInstr::Call(ty, dst, callee, args) = instr else {
             panic!("Not a call instruction!");
         };
-        let irty = LLType::fromIRType(ty);
-        let dst = self.lowerToReg(dst, irty);
+        let llty = LLType::fromIRType(ty);
+        let dst = self.lowerToReg(dst, llty);
 
-        let callee = self.lowerToReg(callee, LLType::I64);
+        let callee = match callee {
+            IRValue::Sym(s) => x86Value::Sym(*s),
+            _ => self.lowerToReg(callee, LLType::I64),
+        };
+
         self.emit(Call(callee));
-        self.emit(Mov(dst, x86Value::reg(Reg::A, irty)));
+        let a = match llty {
+            LLType::I64 => Reg(RAX),
+            _ => Reg(EAX),
+        };
+
+        let a = match dst.get_type() {
+            LLType::I64 => Reg(RAX),
+            LLType::I32 => Reg(EAX),
+            LLType::I16 => Reg(AX),
+            LLType::I8 => Reg(AL),
+            _ => unreachable!(),
+        };
+        self.emit(Mov(dst, a));
     }
 
     pub(crate) fn lower_return(&mut self, instr: &IRInstr) {
@@ -53,16 +79,22 @@ impl x86Function {
                 let rs1 = self.lowerToReg(rs1, llty);
 
                 let rty_bits = self.getReturnType().bits();
-                let a = if rty_bits == 64 { RAX } else { EAX };
+                let a = match llty {
+                    LLType::I64 => Reg(RAX),
+                    _ => Reg(EAX),
+                };
 
-                if ty.bits() >= a.ty().bits() {
-                    self.emit(Mov(a, rs1));
-                } else {
-                    self.emit(Movzx(a, rs1));
-                }
+                // TODO
+                // if ty.bits() >= a.ty().bits() {
+                self.emit(Mov(a, rs1));
+                // } else {
+                //     self.emit(Movzx(a, rs1));
+                // }
+                self.emit(Ret);
             }
             IRInstr::Retv => {
-                self.emit(Mov(RAX, x86Value::Imm(0)));
+                self.emit(Mov(x86Value::Reg(RAX), x86Value::Imm(0)));
+                self.emit(Ret);
             }
             _ => panic!("Not a return instruction!"),
         }

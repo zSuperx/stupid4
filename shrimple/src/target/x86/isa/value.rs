@@ -35,29 +35,39 @@ impl Display for RFLAG {
 }
 
 #[derive(Clone, Debug, Copy)]
-pub enum x86Value {
-    Imm(i128),
-    Reg {
-        /// The register name this value is bound to
-        name: Reg,
-        /// The low-level type this register holds
-        ty: LLType,
-    },
-    Mem {
-        base: Reg,
-        index: Option<Reg>,
+pub enum AddressMode {
+    // [base + (index * scale) + disp]
+    Direct {
+        base: Register,
+        index: Option<Register>,
         scale: usize,
         disp: i128,
         /// The low-level type this pointer points to
         ty: LLType,
     },
+    // [rel symbol]
+    Relative(ModuleSymbol),
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum x86Value {
+    Imm(i128),
+    Reg(Register),
+    Mem(AddressMode),
     CC(RFLAG),
     Sym(ModuleSymbol),
 }
 
+#[allow(unused_imports)]
+pub use x86Value::{CC, Imm, Mem, Reg, Sym};
+
 impl x86Value {
-    pub const fn reg(name: Reg, ty: LLType) -> x86Value {
-        x86Value::Reg { name, ty }
+    pub fn get_type(&self) -> LLType {
+        match self {
+            Reg(register) => register.get_type(),
+            Mem(AddressMode::Direct { ty, .. }) => *ty,
+            _ => panic!("No type for {self}"),
+        }
     }
 
     pub fn is_mem(&self) -> bool {
@@ -68,36 +78,29 @@ impl x86Value {
         matches!(self, x86Value::Reg { .. })
     }
 
-    pub const fn mem(base: Reg, ty: LLType) -> x86Value {
-        x86Value::Mem {
+    pub const fn mem(base: Register, ty: LLType) -> x86Value {
+        x86Value::Mem(AddressMode::Direct {
             base,
             index: None,
             scale: 1,
             disp: 0,
             ty,
-        }
+        })
     }
 
-    pub fn getReg(&self) -> SmallVec<[Reg; 2]> {
+    pub fn getReg(&self) -> SmallVec<[Register; 2]> {
         match self {
-            x86Value::Reg { name, .. } => smallvec![*name],
-            x86Value::Mem { base, index, .. } => {
-                let mut ret = smallvec![*base];
-                if let Some(index) = *index {
-                    ret.push(index);
-                }
-                ret
-            }
+            x86Value::Reg(name) => smallvec![*name],
             _ => smallvec![],
         }
     }
 
-    pub fn rewriteReg(&mut self, old: Reg, new: Reg) {
+    pub fn rewriteReg(&mut self, old: Register, new: Register) {
         match self {
-            x86Value::Reg { name, .. } if old == *name => {
+            x86Value::Reg(name) if old == *name => {
                 *name = new;
             }
-            x86Value::Mem { base, index, .. } => {
+            x86Value::Mem(AddressMode::Direct { base, index, .. }) => {
                 if *base == old {
                     *base = new;
                 }
@@ -111,38 +114,30 @@ impl x86Value {
         }
     }
 
-    pub const fn memDisp(base: Reg, disp: i128, ty: LLType) -> x86Value {
-        x86Value::Mem {
+    pub const fn memDisp(base: Register, disp: i128, ty: LLType) -> x86Value {
+        x86Value::Mem(AddressMode::Direct {
             base,
             index: None,
             scale: 1,
             disp,
             ty,
-        }
+        })
     }
 
-    pub const fn memFull(
-        base: Reg,
-        index: Option<Reg>,
+    pub const fn memDirect(
+        base: Register,
+        index: Option<Register>,
         scale: usize,
         disp: i128,
         ty: LLType,
     ) -> x86Value {
-        x86Value::Mem {
+        x86Value::Mem(AddressMode::Direct {
             base,
             index,
             scale,
             disp,
             ty,
-        }
-    }
-
-    pub fn ty(&self) -> LLType {
-        match self {
-            x86Value::Reg { name, ty } => *ty,
-            x86Value::Mem { ty, .. } => *ty,
-            _ => panic!("{self} value does not have a type"),
-        }
+        })
     }
 }
 
@@ -151,21 +146,21 @@ impl Display for x86Value {
         match self {
             x86Value::Imm(i) => i.fmt(f),
             x86Value::Sym(s) => s.fmt(f),
-            x86Value::Reg { name, ty } => name.sized_print(f, ty.bits()),
-            x86Value::Mem {
+            x86Value::Reg(name) => name.fmt(f),
+            x86Value::Mem(AddressMode::Direct {
                 base,
-                ty,
                 index,
                 scale,
                 disp,
-            } => {
+                ty,
+            }) => {
                 f.write_str(ty.width_str())?;
                 f.write_str("[")?;
-                base.sized_print(f, 64);
+                base.fmt(f)?;
                 if let Some(i) = index {
-                    assert_ne!(*i, Reg::SP);
+                    assert_ne!(*i, Register::SP);
                     f.write_str(" + ")?;
-                    i.sized_print(f, 64)?;
+                    i.fmt(f)?;
                     if *scale > 1 {
                         f.write_fmt(format_args!("*{scale}"))?;
                     }
@@ -177,6 +172,9 @@ impl Display for x86Value {
                     1.. => f.write_fmt(format_args!(" + {}", disp.abs()))?,
                 }
                 f.write_str("]")
+            }
+            x86Value::Mem(AddressMode::Relative(symbol)) => {
+                f.write_fmt(format_args!("[rel {symbol}]"))
             }
             x86Value::CC(flags) => flags.fmt(f),
         }

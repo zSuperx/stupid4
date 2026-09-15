@@ -14,7 +14,6 @@ pub struct BasicBlock<I: InstructionTrait> {
     pub predecessors: BTreeSet<Label<I>>,
     pub fallthrough: Option<Label<I>>,
     pub instructions: Vec<I>,
-    pub terminator: Option<I>,
 
     pub live_in: BitSet,
     pub live_out: BitSet,
@@ -30,12 +29,19 @@ impl<I: InstructionTrait> BasicBlock<I> {
             predecessors: Default::default(),
             fallthrough: Default::default(),
             instructions: Default::default(),
-            terminator: Default::default(),
             live_in: Default::default(),
             live_out: Default::default(),
             gen_: Default::default(),
             kill: Default::default(),
         }
+    }
+
+    pub fn terminator(&self) -> Option<&I> {
+        self.instructions.last().filter(|i| i.is_terminator())
+    }
+
+    pub fn delete_terminator(&mut self) -> Option<I> {
+        self.instructions.pop_if(|i| i.is_terminator())
     }
 
     /// This function calls the provided `rewriter` closure on each instruction within the

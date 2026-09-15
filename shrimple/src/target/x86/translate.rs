@@ -37,8 +37,8 @@ impl x86Function {
             self.meta.v_rsp
         );
 
-        self.emit(Sub(RSP, x86Value::Imm(ty.bytes() as i128)));
-        let slot = x86Value::memDisp(Reg::BP, self.meta.v_rsp, ty);
+        self.emit(Sub(Reg(RSP), Imm(ty.bytes() as i128)));
+        let slot = x86Value::memDisp(RBP, self.meta.v_rsp, ty);
         self.meta.v2p.insert(*value, slot);
         slot
     }
@@ -46,11 +46,17 @@ impl x86Function {
     pub fn lowerToReg(&mut self, value: &IRValue, ty: LLType) -> x86Value {
         match value {
             IRValue::Imm(i) => {
-                let reg = x86Value::reg(self.nextReg(), ty);
-                self.emit(Mov(reg, x86Value::Imm(*i)));
+                // let reg = Reg(self.nextReg(ty));
+                // self.emit(Mov(reg, Imm(*i)));
+                // reg
+                Imm(*i)
+            }
+            IRValue::Sym(s) => {
+                let ptr = Mem(AddressMode::Relative(*s));
+                let reg = Reg(self.nextReg(LLType::I64));
+                self.emit(Lea(reg, ptr));
                 reg
             }
-            IRValue::Sym(s) => x86Value::Sym(*s),
             IRValue::Reg(r) => {
                 if let Some(s) = self.meta.v2p.get(value) {
                     // NOTE: If this was the n'th argument (where n > 6), this will return a memory
@@ -59,7 +65,7 @@ impl x86Function {
                     // This should be fixed in a legalizer pass
                     *s
                 } else {
-                    x86Value::reg(Reg::Virt(*r), ty)
+                    Reg(Virt(*r, ty))
                 }
             }
             IRValue::Ptr(r) => {
@@ -67,13 +73,13 @@ impl x86Function {
                     assert!(s.is_mem());
                     // If this pointer is mapped to a physical address (i.e. [rbp - 8])
                     // we need to emit a lea instruction
-                    let reg = x86Value::reg(self.nextReg(), LLType::I64);
+                    let reg = Reg(self.nextReg(LLType::I64));
                     self.emit(Lea(reg, s));
                     reg
                 } else {
                     // But if it's a new pointer, we don't have to bind it to a physical address
                     // We also don't need to emit a lea, since address of [%1] is just %1
-                    x86Value::reg(Reg::Virt(*r), ty)
+                    Reg(Virt(*r, LLType::I64))
                 }
             }
         }
@@ -81,11 +87,12 @@ impl x86Function {
 
     pub fn lowerToPtr(&mut self, value: &IRValue, offset: i128, ty: LLType) -> x86Value {
         if let Some(s) = self.meta.v2p.get(value) {
+            assert!(s.is_mem());
             return *s;
         }
         match value {
-            IRValue::Ptr(r) => x86Value::mem(Reg::Virt(*r), ty),
-            IRValue::Sym(s) => x86Value::Sym(*s),
+            IRValue::Ptr(r) => x86Value::mem(Virt(*r, LLType::I64), ty),
+            IRValue::Sym(s) => Mem(AddressMode::Relative(*s)),
             _ => panic!("cant turn {value:?} into pointer"),
         }
     }
@@ -100,41 +107,24 @@ impl x86Function {
         });
 
         // Make the prologue the actual entrypoint
-        let stir_ep = stir_function.getEntryPoint();
-        let body = block_map[&stir_ep];
-
-        // Create prologue
-        let prologue = self.newNamedBlock("prologue");
-        self.setEntryPoint(prologue);
-        self.setInsertPoint(prologue);
-        self.emit(Push(RBP));
-        self.emit(Mov(RBP, RSP));
-        self.emit(Jmp(body));
-        self.addSuccessorsToCurrent(&[body]);
-        self.addFallthrough(body);
-
-        // Create epilogue
-        let epilogue = self.newNamedBlock("epilogue");
-        self.setInsertPoint(epilogue);
-        self.emit(Mov(RSP, RBP));
-        self.emit(Pop(RBP));
-        self.emit(Ret);
-        self.addFallthroughTo(body, epilogue);
 
         // Perform a visitor pass through the function and translate each block one at a time
-        stir_function.dfs(|stir_function, curr_id| {
-            // Map STIR BB to MC BB
-            let curr = block_map[&curr_id];
-            let block = &stir_function.blocks[&curr_id];
-            self.setInsertPoint(curr);
+        stir_function.dfs(|stir_function, ir_label| {
+            let ir_block = &stir_function.blocks[&ir_label];
 
-            for instr in block.instructions.iter().chain(&block.terminator) {
+            // Map STIR BB to MC BB
+            let mc_label = block_map[&ir_label];
+            self.setInsertPoint(mc_label);
+
+            if ir_label == stir_function.getEntryPoint() {
+                self.setEntryPoint(mc_label);
+            }
+
+            for instr in ir_block.instructions.iter() {
                 match instr {
                     IRInstr::Comment(s) => self.emit(Comment(s.clone())),
-                    IRInstr::Jmp(b) => {
-                        let b = block_map[b];
-                        self.addSuccessorsToCurrent(&[b]);
-                        self.emit(Jmp(b));
+                    IRInstr::Alloca(ty, dst) => {
+                        self.createFrameSlot(dst, ty);
                     }
                     IRInstr::Store(ty, ptr, rs1) => {
                         let llty = LLType::fromIRType(ty);
@@ -191,7 +181,12 @@ impl x86Function {
                             CmpOp::Eq => RFLAG::EQ,
                             CmpOp::Ne => RFLAG::NE,
                         };
-                        self.meta.v2p.insert(*dst, x86Value::CC(flag));
+                        self.meta.v2p.insert(*dst, CC(flag));
+                    }
+                    IRInstr::Jmp(b) => {
+                        let b = block_map[b];
+                        self.addSuccessorsToCurrent(&[b]);
+                        self.emit(Jmp(b));
                     }
                     IRInstr::Br(cond, then_bb, else_bb) => {
                         let x86then = block_map[then_bb];
@@ -200,7 +195,7 @@ impl x86Function {
                         self.addFallthrough(x86else);
                         if let Some(phy) = self.meta.v2p.get(cond) {
                             match phy {
-                                x86Value::CC(rflag) => {
+                                CC(rflag) => {
                                     let jcc = match rflag {
                                         RFLAG::LT => Jl,
                                         RFLAG::LE => Jle,
@@ -219,7 +214,7 @@ impl x86Function {
                             }
                         } else {
                             let cond = self.lowerToReg(cond, LLType::I8);
-                            self.emit(Cmp(cond, x86Value::Imm(0)));
+                            self.emit(Cmp(cond, Imm(0)));
                             self.emit(Jnz(x86then));
                         }
                     }
@@ -232,7 +227,7 @@ impl x86Function {
                         let addr = match index {
                             IRValue::Reg(_) | IRValue::Ptr(_) => {
                                 let index_val = self.lowerToReg(index, LLType::I64);
-                                x86Value::memFull(
+                                x86Value::memDirect(
                                     base.getReg()[0],
                                     Some(index_val.getReg()[0]),
                                     llty.bytes(),
@@ -241,25 +236,13 @@ impl x86Function {
                                 )
                             }
                             IRValue::Imm(i) => {
-                                x86Value::memFull(base.getReg()[0], None, llty.bytes(), *i, llty)
+                                x86Value::memDirect(base.getReg()[0], None, llty.bytes(), *i, llty)
                             }
-                            IRValue::Sym(s) => x86Value::Sym(*s),
+                            IRValue::Sym(s) => Mem(AddressMode::Relative(*s)),
                         };
                         self.emit(Lea(dst, addr));
                     }
-                    IRInstr::Alloca(ty, dst) => {
-                        let dst = self.createFrameSlot(dst, ty);
-                    }
-                    IRInstr::Retv => {
-                        self.lower_return(instr);
-                        self.addSuccessorsToCurrent(&[epilogue]);
-                        self.emit(Jmp(epilogue));
-                    }
-                    IRInstr::Ret(ty, rs1) => {
-                        self.lower_return(instr);
-                        self.addSuccessorsToCurrent(&[epilogue]);
-                        self.emit(Jmp(epilogue));
-                    }
+                    IRInstr::Ret(..) | IRInstr::Retv => self.lower_return(instr),
                     IRInstr::Trunc(to_ty, dst, from_ty, rs1) => {
                         let to_llty = LLType::fromIRType(to_ty);
                         let dst = self.lowerToReg(dst, to_llty);

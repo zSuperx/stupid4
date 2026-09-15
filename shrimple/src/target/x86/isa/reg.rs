@@ -1,127 +1,139 @@
-use crate::target::x86::isa::{types::LLType, value::x86Value};
-
+#[repr(usize)]
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
-pub enum Reg {
-    A,
-    B,
-    C,
-    D,
-    SI,
-    DI,
-    SP,
-    BP,
-    R8,
-    R9,
-    R10,
-    R11,
-    R12,
-    R13,
-    R14,
-    R15,
-    Virt(usize),
+pub enum Register {
+    AL = 0,
+    AH = 1,
+    AX = 2,
+    EAX = 3,
+    RAX = 4,
+
+    BL = 5,
+    BH = 6,
+    BX = 7,
+    EBX = 8,
+    RBX = 9,
+
+    CL = 10,
+    CH = 11,
+    CX = 12,
+    ECX = 13,
+    RCX = 14,
+
+    DL = 15,
+    DH = 16,
+    DX = 17,
+    EDX = 18,
+    RDX = 19,
+
+    SIL = 20,
+    SI = 21,
+    ESI = 22,
+    RSI = 23,
+
+    DIL = 24,
+    DI = 25,
+    EDI = 26,
+    RDI = 27,
+
+    SPL = 28,
+    SP = 29,
+    ESP = 30,
+    RSP = 31,
+
+    BPL = 32,
+    BP = 33,
+    EBP = 34,
+    RBP = 35,
+
+    R8B = 36,
+    R8W = 37,
+    R8D = 38,
+    R8 = 39,
+
+    R9B = 40,
+    R9W = 41,
+    R9D = 42,
+    R9 = 43,
+
+    R10B = 44,
+    R10W = 45,
+    R10D = 46,
+    R10 = 47,
+
+    R11B = 48,
+    R11W = 49,
+    R11D = 50,
+    R11 = 51,
+
+    R12B = 52,
+    R12W = 53,
+    R12D = 54,
+    R12 = 55,
+
+    R13B = 56,
+    R13W = 57,
+    R13D = 58,
+    R13 = 59,
+
+    R14B = 60,
+    R14W = 61,
+    R14D = 62,
+    R14 = 63,
+
+    R15B = 64,
+    R15W = 65,
+    R15D = 66,
+    R15 = 67,
+
+    Virt(usize, LLType),
 }
 
-impl From<usize> for Reg {
-    fn from(value: usize) -> Self {
-        use Reg::*;
-        match value {
-            0 => A,
-            1 => B,
-            2 => C,
-            3 => D,
-            4 => SI,
-            5 => DI,
-            6 => SP,
-            7 => BP,
-            8 => R8,
-            9 => R9,
-            10 => R10,
-            11 => R11,
-            12 => R12,
-            13 => R13,
-            14 => R14,
-            15 => R15,
-            x => Virt(x),
+pub use Register::*;
+
+use crate::target::x86::isa::LLType;
+
+impl Register {
+    pub fn get_type(&self) -> LLType {
+        match self {
+            Virt(_, lltype) => *lltype,
+            _ => todo!(),
         }
     }
 }
 
-impl From<Reg> for usize {
-    fn from(other: Reg) -> usize {
-        use Reg::*;
+impl From<&Register> for usize {
+    fn from(other: &Register) -> usize {
+        use Register::*;
         match other {
-            A => 0,
-            B => 1,
-            C => 2,
-            D => 3,
-            SI => 4,
-            DI => 5,
-            SP => 6,
-            BP => 7,
-            R8 => 8,
-            R9 => 9,
-            R10 => 10,
-            R11 => 11,
-            R12 => 12,
-            R13 => 13,
-            R14 => 14,
-            R15 => 15,
-            Virt(x) => x + 16,
+            Virt(x, _) => x + 68,
+            x => usize::from(x),
         }
     }
 }
 
-impl Reg {
-    pub fn sized_print(&self, f: &mut std::fmt::Formatter<'_>, bits: usize) -> std::fmt::Result {
-        let names = match self {
-            Reg::A => ["al", "ax", "eax", "rax"],
-            Reg::B => ["bl", "bx", "ebx", "rbx"],
-            Reg::C => ["cl", "cx", "ecx", "rcx"],
-            Reg::D => ["dl", "dx", "edx", "rdx"],
-            Reg::SI => ["sil", "si", "esi", "rsi"],
-            Reg::DI => ["dil", "di", "edi", "rdi"],
-            Reg::SP => ["spl", "sp", "esp", "rsp"],
-            Reg::BP => ["bpl", "bp", "ebp", "rbp"],
-            Reg::R8 => ["r8b", "r8w", "r8d", "r8"],
-            Reg::R9 => ["r9b", "r9w", "r9d", "r9"],
-            Reg::R10 => ["r10b", "r10w", "r10d", "r10"],
-            Reg::R11 => ["r11b", "r11w", "r11d", "r11"],
-            Reg::R12 => ["r12b", "r12w", "r12d", "r12"],
-            Reg::R13 => ["r13b", "r13w", "r13d", "r13"],
-            Reg::R14 => ["r14b", "r14w", "r14d", "r14"],
-            Reg::R15 => ["r15b", "r15w", "r15d", "r15"],
-            Reg::Virt(v) => {
-                let width_spec = match bits {
-                    8 => "b",
-                    16 => "w",
-                    32 => "d",
-                    64 => "q",
-                    _ => panic!("Size: {bits} not supported"),
-                };
-                return f.write_fmt(format_args!("%{v}{width_spec}"));
-            }
-        };
-        let sized_name = match bits {
-            8 => names[0],
-            16 => names[1],
-            32 => names[2],
-            64 => names[3],
-            _ => {
-                panic!("Size: {bits} not supported")
-            }
-        };
-        f.write_str(sized_name)
+impl From<Register> for usize {
+    fn from(other: Register) -> usize {
+        use Register::*;
+        match other {
+            Virt(x, _) => x + 68,
+            x => usize::from(x),
+        }
     }
 }
 
-pub const RBP: x86Value = x86Value::reg(Reg::BP, LLType::I64);
-pub const RSP: x86Value = x86Value::reg(Reg::SP, LLType::I64);
-pub const RAX: x86Value = x86Value::reg(Reg::A, LLType::I64);
-pub const EAX: x86Value = x86Value::reg(Reg::A, LLType::I32);
-
-pub const RDI: x86Value = x86Value::reg(Reg::DI, LLType::I64);
-pub const RSI: x86Value = x86Value::reg(Reg::SI, LLType::I64);
-pub const RDX: x86Value = x86Value::reg(Reg::D, LLType::I64);
-pub const RCX: x86Value = x86Value::reg(Reg::C, LLType::I64);
-pub const R8Q: x86Value = x86Value::reg(Reg::R8, LLType::I64);
-pub const R9Q: x86Value = x86Value::reg(Reg::R9, LLType::I64);
+impl std::fmt::Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Register::Virt(v, ty) => {
+                let size_char = match ty {
+                    LLType::I8 => "b",
+                    LLType::I16 => "w",
+                    LLType::I32 => "d",
+                    LLType::I64 => "q",
+                };
+                f.write_fmt(format_args!("%{v}{size_char}"))
+            }
+            _ => format!("{self:?}").to_lowercase().fmt(f),
+        }
+    }
+}
