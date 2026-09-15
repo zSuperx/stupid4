@@ -7,7 +7,7 @@ use crate::common::ModuleSymbol;
 use super::reg::*;
 use super::types::*;
 
-#[derive(Clone, Debug, Copy, Eq, PartialEq)]
+#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash)]
 pub enum RFLAG {
     LT,
     LE,
@@ -34,7 +34,7 @@ impl Display for RFLAG {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash)]
 pub enum AddressMode {
     // [base + (index * scale) + disp]
     Direct {
@@ -47,9 +47,13 @@ pub enum AddressMode {
     },
     // [rel symbol]
     Relative(ModuleSymbol),
+    FrameSlot {
+        index: usize,
+        ty: LLType,
+    },
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash)]
 pub enum x86Value {
     Imm(i128),
     Reg(Register),
@@ -76,6 +80,10 @@ impl x86Value {
 
     pub fn is_reg(&self) -> bool {
         matches!(self, x86Value::Reg { .. })
+    }
+
+    pub fn is_frame(&self) -> bool {
+        matches!(self, Mem(AddressMode::FrameSlot { .. }))
     }
 
     pub const fn mem(base: Register, ty: LLType) -> x86Value {
@@ -154,11 +162,11 @@ impl Display for x86Value {
                 disp,
                 ty,
             }) => {
-                f.write_str(ty.width_str())?;
-                f.write_str("[")?;
+                f.write_fmt(format_args!("{} [", ty.width_str()))?;
                 base.fmt(f)?;
                 if let Some(i) = index {
-                    assert_ne!(*i, Register::SP);
+                    // TODO: Add register families
+                    assert_ne!(*i, SP);
                     f.write_str(" + ")?;
                     i.fmt(f)?;
                     if *scale > 1 {
@@ -176,6 +184,8 @@ impl Display for x86Value {
             x86Value::Mem(AddressMode::Relative(symbol)) => {
                 f.write_fmt(format_args!("[rel {symbol}]"))
             }
+            x86Value::Mem(AddressMode::FrameSlot { index, ty }) => 
+                f.write_fmt(format_args!("{} [frame #{index}]", ty.width_str())),
             x86Value::CC(flags) => flags.fmt(f),
         }
     }

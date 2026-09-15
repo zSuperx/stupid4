@@ -61,16 +61,16 @@ impl TirFunction {
             let ty = ctx.lookup_symbol_mut(&symbol).ty.clone();
             let val = match ty.as_ref() {
                 QualType::Struct { .. } => {
-                    let arg = IRValue::Ptr(function.nextReg());
-                    function.addArg(arg, IRType::Ptr);
+                    let arg = function.createVReg(IRType::Ptr);
+                    function.addArg(arg);
                     arg
                 }
                 ty => {
-                    let arg = IRValue::Reg(function.nextReg());
-                    let dst = IRValue::Ptr(function.nextReg());
+                    let dst = function.createVReg(IRType::Ptr);
                     let irty = ty.toIRType();
+                    let arg = function.createVReg(irty);
                     function.emit(Alloca(irty, dst));
-                    function.addArg(arg, irty);
+                    function.addArg(arg);
                     function.emit(Store(irty, dst, arg));
                     dst
                 }
@@ -90,7 +90,7 @@ impl TirFunction {
                     todo!("Figure out how to alloca aggregate types")
                 }
                 ty => {
-                    let dst = IRValue::Ptr(function.nextReg());
+                    let dst = function.createVReg(IRType::Ptr);
                     let irty = ty.toIRType();
                     function.emit(Alloca(irty, dst));
                     dst
@@ -206,8 +206,8 @@ impl TirStmt {
 impl TirExpr {
     pub fn codegen(&self, ctx: &mut CompilerContext, function: &mut IRFunction) -> IRValue {
         match &self.kind {
-            TirExprKind::Num(n) => IRValue::Imm(*n),
-            TirExprKind::Bool(b) => IRValue::Imm((*b).into()),
+            TirExprKind::Num(n) => IRValue::Imm(*n, self.ty.toIRType()),
+            TirExprKind::Bool(b) => IRValue::Imm((*b).into(), self.ty.toIRType()),
             TirExprKind::Store { ptr, val } => {
                 let irty = val.ty.toIRType();
                 let ptr = ptr.codegen(ctx, function);
@@ -218,7 +218,7 @@ impl TirExpr {
             TirExprKind::Load { inner } => {
                 let irty = inner.ty.get_pointee().toIRType();
                 let ptr = inner.codegen(ctx, function);
-                let val = IRValue::typed(function.nextReg(), irty);
+                let val = function.createVReg(irty);
                 function.emit(Load(irty, ptr, val));
                 val
             }
@@ -226,7 +226,7 @@ impl TirExpr {
                 let info = ctx.lookup_symbol(symbol);
                 let irty = info.ty.toIRType();
                 let ptr = info.value.expect("Symbol should have a value by now");
-                let dst = IRValue::typed(function.nextReg(), irty);
+                let dst = function.createVReg(irty);
                 function.emit(Load(irty, ptr, dst));
                 dst
             }
@@ -239,17 +239,17 @@ impl TirExpr {
                 let rhs_val = rhs.codegen(ctx, function);
                 match op {
                     BinOp::Add => {
-                        let result = IRValue::typed(function.nextReg(), irty);
+                        let result = function.createVReg(irty);
                         function.emit(Add(irty, result, lhs_val, rhs_val));
                         result
                     }
                     BinOp::Sub => {
-                        let result = IRValue::Reg(function.nextReg());
+                        let result = function.createVReg(irty);
                         function.emit(Sub(ty.toIRType(), result, lhs_val, rhs_val));
                         result
                     }
                     BinOp::PtrAdd => {
-                        let dst = IRValue::typed(function.nextReg(), irty);
+                        let dst = function.createVReg(irty);
                         if lhs.ty.is_pointer() {
                             let base_ty = lhs.ty.get_pointee().toIRType();
                             function.emit(Getaddr(dst, lhs_val, base_ty, rhs_val));
@@ -262,7 +262,7 @@ impl TirExpr {
                     }
                     BinOp::PtrSub => todo!(),
                     BinOp::Mul => {
-                        let result = IRValue::Reg(function.nextReg());
+                        let result = function.createVReg(irty);
                         if lhs.ty.is_signed() {
                             function.emit(Smul(ty.toIRType(), result, lhs_val, rhs_val));
                         } else {
@@ -271,7 +271,7 @@ impl TirExpr {
                         result
                     }
                     BinOp::Div => {
-                        let result = IRValue::Reg(function.nextReg());
+                        let result = function.createVReg(irty);
                         if lhs.ty.is_signed() {
                             function.emit(Sdiv(ty.toIRType(), result, lhs_val, rhs_val));
                         } else {
@@ -280,19 +280,18 @@ impl TirExpr {
                         result
                     }
                     BinOp::Eq => {
-                        let result = IRValue::Reg(function.nextReg());
-                        let ty = qtype(&QualType::Bool);
-                        function.emit(Icmp(CmpOp::Eq, ty.toIRType(), result, lhs_val, rhs_val));
+                        let result = function.createVReg(IRType::I1);
+                        function.emit(Icmp(CmpOp::Eq, IRType::I1, result, lhs_val, rhs_val));
                         result
                     }
                     BinOp::Ne => {
-                        let result = IRValue::Reg(function.nextReg());
+                        let result = function.createVReg(IRType::I1);
                         let ty = qtype(&QualType::Bool);
                         function.emit(Icmp(CmpOp::Ne, ty.toIRType(), result, lhs_val, rhs_val));
                         result
                     }
                     BinOp::Le | BinOp::Lt | BinOp::Ge | BinOp::Gt => {
-                        let result = IRValue::Reg(function.nextReg());
+                        let result = function.createVReg(IRType::I1);
                         let ty = lhs.ty.clone();
                         let (signed, unsigned) = match op {
                             BinOp::Lt => (
@@ -329,7 +328,7 @@ impl TirExpr {
                 let to_ty = target_ty.toIRType();
 
                 comment!(function, "Casting to {to_ty}");
-                let dst = IRValue::typed(function.nextReg(), to_ty);
+                let dst = function.createVReg(to_ty);
                 if target_ty.bits() < expr.ty.bits() {
                     function.emit(Trunc(to_ty, dst, from_ty, rhs_val))
                 } else if target_ty.bits() > from_ty.bits() {
@@ -351,7 +350,7 @@ impl TirExpr {
                 let callee_val = callee.codegen(ctx, function);
                 let arg_values: Vec<_> = args.iter().map(|a| a.codegen(ctx, function)).collect();
                 let irty = self.ty.toIRType();
-                let dst = IRValue::typed(function.nextReg(), irty);
+                let dst = function.createVReg(irty);
                 function.emit(Call(irty, dst, callee_val, arg_values.into()));
                 dst
             }

@@ -141,6 +141,7 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Spanned<Rc<RawType>> {
+        // TODO: Parse function types
         let span_start = self.mark();
         let tok = self.lexer.peek();
         let ty = match tok.inner {

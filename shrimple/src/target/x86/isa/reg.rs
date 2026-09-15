@@ -1,5 +1,5 @@
 #[repr(usize)]
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, Eq, PartialEq, Hash)]
 pub enum Register {
     AL = 0,
     AH = 1,
@@ -103,7 +103,6 @@ impl Register {
 
 impl From<&Register> for usize {
     fn from(other: &Register) -> usize {
-        use Register::*;
         match other {
             Virt(x, _) => x + 68,
             x => usize::from(x),
@@ -113,7 +112,6 @@ impl From<&Register> for usize {
 
 impl From<Register> for usize {
     fn from(other: Register) -> usize {
-        use Register::*;
         match other {
             Virt(x, _) => x + 68,
             x => usize::from(x),
@@ -124,7 +122,7 @@ impl From<Register> for usize {
 impl std::fmt::Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Register::Virt(v, ty) => {
+            Virt(v, ty) => {
                 let size_char = match ty {
                     LLType::I8 => "b",
                     LLType::I16 => "w",

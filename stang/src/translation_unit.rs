@@ -102,7 +102,7 @@ impl CompilerContext {
         };
         let ty = qtype(&function_ty);
         let symbol = next_symbol(&name.inner);
-        let module_symbol = self.builder.add_symbol(name.inner.to_string());
+        let module_symbol = self.module.add_symbol(name.inner.to_string());
         self.top_level_scope
             .insert(name.inner.clone(), symbol.clone());
         self.symbol_table.insert(

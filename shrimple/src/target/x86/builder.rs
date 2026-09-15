@@ -7,12 +7,13 @@ use crate::{
         x86::isa::*,
     },
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 
 #[derive(Default)]
 pub struct Metadata {
     pub(super) v2p: HashMap<IRValue, x86Value>,
     pub(super) v_rsp: i128,
+    pub(super) frame_slots: Vec<LLType>,
     pub(super) ir_args: Vec<IRType>,
 }
 
@@ -21,7 +22,6 @@ impl x86Function {
         // Create the function
         let rty = LLType::fromIRType(stir_function.getReturnType());
         let mut mcf = x86Function::new(stir_function.name.clone(), rty, Metadata::default());
-        mcf.setRegCount(stir_function.getRegCount());
 
         // Handle ABI impl
         mcf.resolve_args(stir_function);
@@ -31,6 +31,8 @@ impl x86Function {
 
         // Legalizes instructions that may have been mangled by conforming to the ABI
         mcf.legalize();
+
+        mcf.dead_code_elimination();
 
         if mcf.check_frame_emission() {
             mcf.emit_frame();
@@ -48,26 +50,43 @@ pub type x86Module = ModuleBuilder<x86Instr, x86Value, LLType, Metadata>;
 
 impl x86Function {
     pub fn nextReg(&mut self, ty: LLType) -> Register {
-        let ret = Register::Virt(self.reg_count, ty);
+        let ret = Virt(self.reg_count, ty);
         self.reg_count += 1;
         ret
     }
 
-    pub fn print(&self, include_comments: bool) {
-        println!("{}:", self.name);
+    pub fn createRegValue(&mut self, ty: LLType) -> x86Value {
+        let reg = self.nextReg(ty);
+        Reg(reg)
+    }
+
+    pub fn createMemValue(&mut self, ty: LLType) -> x86Value {
+        let base = self.nextReg(LLType::I64);
+        Mem(AddressMode::Direct {
+            base,
+            index: None,
+            scale: 0,
+            disp: 0,
+            ty,
+        })
+    }
+
+    pub fn print(&self, writer: &mut Box<dyn Write>, include_comments: bool) {
+        writeln!(writer, "{}:", self.name);
         self.dfs(|mcf, curr_id| {
-            println!("{curr_id}:");
+            writeln!(writer, "{curr_id}:");
             let block = &mcf.blocks[&curr_id];
             for i in block.instructions.iter() {
                 if matches!(i, x86Instr::Comment(..)) && !include_comments {
                     continue;
                 }
-                println!("\t{i}");
+                writeln!(writer, "\t{i}");
             }
             if block.terminator().is_none() {
-                println!("\t; !! (missing terminator)");
+                writeln!(writer, "\t; !! (missing terminator)");
             }
         });
+        writeln!(writer);
     }
 }
 

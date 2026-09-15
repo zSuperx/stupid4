@@ -15,10 +15,10 @@ use std::collections::{BTreeMap, HashSet};
 use crate::common::{BasicBlock, InstructionTrait, Label, ModuleSymbol};
 
 #[derive(Debug, Clone)]
-pub struct FunctionBuilder<I: InstructionTrait, V, T, M> {
+pub struct FunctionBuilder<I: InstructionTrait, V, T, M = ()> {
     pub(crate) name: String,
     pub(crate) symbol: ModuleSymbol,
-    pub(crate) args: Vec<(V, T)>,
+    pub(crate) args: Vec<V>,
     pub(crate) return_type: T,
     pub(crate) entrypoint: Label<I>,
 
@@ -81,8 +81,8 @@ impl<I: InstructionTrait, V, T, M> FunctionBuilder<I, V, T, M> {
         }
     }
 
-    pub fn addArg(&mut self, arg_value: V, arg_type: T) {
-        self.args.push((arg_value, arg_type));
+    pub fn addArg(&mut self, arg_value: V) {
+        self.args.push(arg_value);
     }
 
     pub fn getRegCount(&self) -> usize {
@@ -98,8 +98,8 @@ impl<I: InstructionTrait, V, T, M> FunctionBuilder<I, V, T, M> {
     /// Upon finding an invalid block, the verifier either breaks with `false`, OR if a
     /// `default_return` instruction is provided, will set the block's terminator to that.
     pub fn verify(&mut self, default_return: Option<I>) -> bool {
-        !self.dfs_short_circuit(|builder, curr_id| {
-            let block = builder.blocks.get_mut(&curr_id).unwrap();
+        !self.dfs_short_circuit(|self_, curr_id| {
+            let block = self_.blocks.get_mut(&curr_id).unwrap();
             if block.terminator().is_none() {
                 match default_return.as_ref() {
                     Some(i) => block.instructions.push(i.clone()),

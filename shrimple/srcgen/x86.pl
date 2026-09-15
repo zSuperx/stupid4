@@ -45,12 +45,9 @@ my $isa = {
       fmt  => "; {s}",
     },
 
-    add => $accumOp,
-
-    sub => $accumOp,
-
+    add  => $accumOp,
+    sub  => $accumOp,
     imul => $accumOp,
-
     idiv => $accumOp,
 
     # TODO: add this later when you figure out wtf it does
@@ -78,7 +75,10 @@ my $isa = {
     jno => $jcc,
     jge => $jcc,
     jmp => $jcc,
-    ret => { term => 1 },
+    ret => {
+      uses => [ "&Reg(RAX)", "&Reg(EAX)", "&Reg(AX)", "&Reg(AH)", "&Reg(AL)" ],
+      term => 1,
+    },
 
     lea    => $move,
     mov    => $move,

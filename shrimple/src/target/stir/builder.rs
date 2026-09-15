@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use crate::{
     common::{BasicBlock, FunctionBuilder, Label, ModuleBuilder},
     stir::isa::{IRValue, VReg},
@@ -10,33 +12,38 @@ pub type IRFunction = FunctionBuilder<IRInstr, IRValue, IRType, ()>;
 pub type IRModule = ModuleBuilder<IRInstr, IRValue, IRType, ()>;
 
 impl IRFunction {
-    pub fn nextReg(&mut self) -> VReg {
+    pub fn createVReg(&mut self, ty: IRType) -> IRValue {
         let ret = self.reg_count;
         self.reg_count += 1;
-        ret
+        if ty.is_pointer() {
+            IRValue::Ptr(ret, ty)
+        } else {
+            IRValue::Reg(ret, ty)
+        }
     }
 
-    pub fn print(&self, include_comments: bool) {
-        println!(
+    pub fn print(&self, mut writer: &mut Box<dyn Write>, include_comments: bool) {
+        writeln!(
+            writer,
             "{}({}):",
             self.symbol,
             self.args
                 .iter()
-                .map(|(name, ty)| format!("{name}: {ty}"))
+                .map(|name| format!("{name}"))
                 .collect::<Vec<String>>()
                 .join(", ")
         );
         self.dfs(|mcf, curr_id| {
-            println!("{curr_id}:");
+            writeln!(writer, "{curr_id}:");
             let block = &mcf.blocks[&curr_id];
             for i in block.instructions.iter() {
                 if matches!(i, IRInstr::Comment(..)) && !include_comments {
                     continue;
                 }
-                println!("\t{i}");
+                writeln!(writer, "\t{i}");
             }
             if block.terminator().is_none() {
-                println!("\t; !! (missing terminator)");
+                writeln!(writer, "\t; !! (missing terminator)");
             }
         });
     }

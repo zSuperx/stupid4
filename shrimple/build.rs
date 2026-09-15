@@ -2,8 +2,8 @@ const AUTOGEN_PATH: &str = "./srcgen/";
 
 fn main() {
     println!("cargo::rerun-if-changed={AUTOGEN_PATH}");
-    autogen_file("x86", "./src/target/x86/isa/instr.rs");
-    autogen_file("stir", "./src/target/stir/isa/instr.rs");
+    autogen_file("x86", "./src/target/x86/isa/generated.rs");
+    autogen_file("stir", "./src/target/stir/isa/generated.rs");
 }
 
 fn autogen_file(arch: &str, output_path: &str) {

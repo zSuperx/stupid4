@@ -13,7 +13,7 @@ pub struct CompilerContext {
     pub top_level_scope: HashMap<RcString, Symbol>,
     pub loop_labels: Vec<LoopLabels>,
     pub loop_depth: usize,
-    pub builder: IRModule,
+    pub module: IRModule,
 }
 
 impl CompilerContext {

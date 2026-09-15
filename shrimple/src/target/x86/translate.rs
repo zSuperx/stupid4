@@ -24,89 +24,97 @@ fn align_down_n(val: i128, n: i128) -> i128 {
 }
 
 impl x86Function {
-    pub fn createFrameSlot(&mut self, value: &IRValue, ty: &IRType) -> x86Value {
-        // TODO: Align each alloca based on its alignment
-        // it's so wrong right now but i need to sleep
-        let ty = LLType::fromIRType(ty);
-        self.meta.v_rsp -= ty.bytes() as i128;
-        let old_v_rsp = self.meta.v_rsp;
-        self.meta.v_rsp = align_down_n(self.meta.v_rsp, ty.bytes() as i128);
-        comment!(
-            self,
-            "Virtual RSP aligned from {old_v_rsp} -> {}",
-            self.meta.v_rsp
-        );
-
-        self.emit(Sub(Reg(RSP), Imm(ty.bytes() as i128)));
-        let slot = x86Value::memDisp(RBP, self.meta.v_rsp, ty);
-        self.meta.v2p.insert(*value, slot);
-        slot
+    pub fn createFrameSlot(&mut self, ty: LLType) -> x86Value {
+        self.meta.frame_slots.push(ty);
+        Mem(AddressMode::FrameSlot { index: self.meta.frame_slots.len() - 1, ty })
     }
 
-    pub fn lowerToReg(&mut self, value: &IRValue, ty: LLType) -> x86Value {
-        match value {
-            IRValue::Imm(i) => {
-                // let reg = Reg(self.nextReg(ty));
-                // self.emit(Mov(reg, Imm(*i)));
-                // reg
-                Imm(*i)
+    pub fn lowerToReg(&mut self, value: &IRValue) -> x86Value {
+        let ret = if let Some(x) = self.meta.v2p.get(value).copied() {
+            match x {
+                Reg(..) => x,
+                Mem(..) | Sym(..) => self.materialize_address(x),
+                _ => panic!("Cannot lower this value to a register {x:?}"),
             }
-            IRValue::Sym(s) => {
-                let ptr = Mem(AddressMode::Relative(*s));
-                let reg = Reg(self.nextReg(LLType::I64));
-                self.emit(Lea(reg, ptr));
+        } else {
+            match value {
+                IRValue::Imm(i, irtype) => {
+                    let reg = self.createRegValue(irtype.into());
+                    self.emit(Mov(reg, Imm(*i)));
+                    self.meta.v2p.insert(*value, reg);
+                    reg
+                }
+                IRValue::Reg(_, irtype) => {
+                    let reg = self.createRegValue(irtype.into());
+                    self.meta.v2p.insert(*value, reg);
+                    reg
+                }
+                IRValue::Ptr(_, irtype) => {
+                    let llty = irtype.into();
+                    let mem = self.createMemValue(llty);
+                    self.meta.v2p.insert(*value, mem);
+                    self.materialize_address(mem)
+                }
+                IRValue::Sym(module_symbol) => {
+                    let mem = Mem(AddressMode::Relative(*module_symbol));
+                    self.materialize_address(mem)
+                }
+            }
+        };
+        ret
+    }
+
+    /// Takes a memory value (of the form [...]) and returns its address.
+    ///
+    /// For non-trivial addressing like [rbp - 8], an intermediate `lea` is emitted, but simple
+    /// addresses like [rbp] directly return the inner base register.
+    pub fn materialize_address(&mut self, memory_value: x86Value) -> x86Value {
+        let reg = match memory_value {
+            Mem(AddressMode::Direct {
+                base,
+                index: None,
+                scale,
+                disp: 0,
+                ty,
+            }) => Reg(base),
+            Mem(..) => {
+                let reg = self.createRegValue(LLType::I64);
+                self.emit(Lea(reg, memory_value));
                 reg
             }
-            IRValue::Reg(r) => {
-                if let Some(s) = self.meta.v2p.get(value) {
-                    // NOTE: If this was the n'th argument (where n > 6), this will return a memory
-                    // value. Therefore, we can get illegal instructions like mov [...], [...]
-                    //
-                    // This should be fixed in a legalizer pass
-                    *s
-                } else {
-                    Reg(Virt(*r, ty))
-                }
-            }
-            IRValue::Ptr(r) => {
-                if let Some(s) = self.meta.v2p.get(value).copied() {
-                    assert!(s.is_mem());
-                    // If this pointer is mapped to a physical address (i.e. [rbp - 8])
-                    // we need to emit a lea instruction
-                    let reg = Reg(self.nextReg(LLType::I64));
-                    self.emit(Lea(reg, s));
-                    reg
-                } else {
-                    // But if it's a new pointer, we don't have to bind it to a physical address
-                    // We also don't need to emit a lea, since address of [%1] is just %1
-                    Reg(Virt(*r, LLType::I64))
-                }
-            }
-        }
+            _ => panic!("Not a memory value! {memory_value:?}"),
+        };
+        comment!(self, "Materialized address: {memory_value} -> {reg}");
+        reg
     }
 
     pub fn lowerToPtr(&mut self, value: &IRValue, offset: i128, ty: LLType) -> x86Value {
-        if let Some(s) = self.meta.v2p.get(value) {
+        if let Some(s) = self.meta.v2p.get(value).copied() {
             assert!(s.is_mem());
-            return *s;
-        }
-        match value {
-            IRValue::Ptr(r) => x86Value::mem(Virt(*r, LLType::I64), ty),
-            IRValue::Sym(s) => Mem(AddressMode::Relative(*s)),
-            _ => panic!("cant turn {value:?} into pointer"),
+            s
+        } else {
+            let mem = match value {
+                IRValue::Ptr(..) => self.createMemValue(ty),
+                IRValue::Sym(s) => Mem(AddressMode::Relative(*s)),
+                _ => panic!("cant turn {value:?} into pointer"),
+            };
+            self.meta.v2p.insert(*value, mem);
+            mem
         }
     }
 
     pub(crate) fn translate(&mut self, stir_function: &IRFunction) {
         // Do a first pass to register all blocks in a map
         let mut block_map = HashMap::new();
-        stir_function.dfs(|stir_builder, curr_id| {
-            let curr = &stir_builder.blocks[&curr_id];
+        stir_function.dfs(|stir_function, curr_id| {
+            let curr = &stir_function.blocks[&curr_id];
             let new = self.newNamedBlock(curr.label.name());
             block_map.insert(curr_id, new);
         });
 
-        // Make the prologue the actual entrypoint
+        // NOTE: We don't emit the prologue/epilogue here. Instead, a later optimization pass
+        // decides whether one is needed and only emits it if so. This lets our function avoid frame
+        // setup/teardown when not necessary
 
         // Perform a visitor pass through the function and translate each block one at a time
         stir_function.dfs(|stir_function, ir_label| {
@@ -124,24 +132,24 @@ impl x86Function {
                 match instr {
                     IRInstr::Comment(s) => self.emit(Comment(s.clone())),
                     IRInstr::Alloca(ty, dst) => {
-                        self.createFrameSlot(dst, ty);
+                        let mem = self.createFrameSlot(ty.into());
+                        self.meta.v2p.insert(*dst, mem);
                     }
                     IRInstr::Store(ty, ptr, rs1) => {
-                        let llty = LLType::fromIRType(ty);
+                        let llty = ty.into();
                         let ptr = self.lowerToPtr(ptr, 0, llty);
-                        let rs1 = self.lowerToReg(rs1, llty);
+                        let rs1 = self.lowerToReg(rs1);
                         self.emit(Mov(ptr, rs1));
                     }
-                    IRInstr::Load(ty, ptr, dst) => {
-                        let llty = LLType::fromIRType(ty);
+                    IRInstr::Load(ty, ptr, vdst) => {
+                        let llty = ty.into();
                         let ptr = self.lowerToPtr(ptr, 0, llty);
-                        let dst = self.lowerToReg(dst, llty);
+                        let dst = self.lowerToReg(vdst);
                         self.emit(Mov(dst, ptr));
                     }
                     IRInstr::Copy(ty, dst, rs1) => {
-                        let llty = LLType::fromIRType(ty);
-                        let dst = self.lowerToReg(dst, llty);
-                        let rs1 = self.lowerToReg(rs1, llty);
+                        let dst = self.lowerToReg(dst);
+                        let rs1 = self.lowerToReg(rs1);
                         self.emit(Mov(dst, rs1));
                     }
                     IRInstr::Sdiv(ty, dst, rs1, rs2)
@@ -150,17 +158,16 @@ impl x86Function {
                     | IRInstr::Udiv(ty, dst, rs1, rs2)
                     | IRInstr::Umul(ty, dst, rs1, rs2)
                     | IRInstr::Add(ty, dst, rs1, rs2) => {
-                        let llty = LLType::fromIRType(ty);
-                        let dst = self.lowerToReg(dst, llty);
-                        let rs1 = self.lowerToReg(rs1, llty);
-                        let rs2 = self.lowerToReg(rs2, llty);
+                        let dst = self.lowerToReg(dst);
+                        let rs1 = self.lowerToReg(rs1);
+                        let rs2 = self.lowerToReg(rs2);
                         self.emit(Mov(dst, rs1));
                         let op = match instr {
                             IRInstr::Sdiv(..) => Idiv,
                             IRInstr::Smul(..) => Imul,
                             IRInstr::Sub(..) => Sub,
                             // TODO: change these to Div/Mul?
-                            // Bit awkward since they imply def & use of rax
+                            // Bit awkward since they imply def & use of rax/rdx
                             IRInstr::Udiv(..) => Idiv,
                             IRInstr::Umul(..) => Imul,
                             IRInstr::Add(..) => Add,
@@ -169,9 +176,8 @@ impl x86Function {
                         self.emit(op(dst, rs2));
                     }
                     IRInstr::Icmp(cmp, ty, dst, rs1, rs2) => {
-                        let llty = LLType::fromIRType(ty);
-                        let rs1 = self.lowerToReg(rs1, llty);
-                        let rs2 = self.lowerToReg(rs2, llty);
+                        let rs1 = self.lowerToReg(rs1);
+                        let rs2 = self.lowerToReg(rs2);
                         self.emit(Cmp(rs1, rs2));
                         let flag = match cmp {
                             CmpOp::Slt | CmpOp::Ult => RFLAG::LT,
@@ -213,7 +219,7 @@ impl x86Function {
                                 _ => panic!("What"),
                             }
                         } else {
-                            let cond = self.lowerToReg(cond, LLType::I8);
+                            let cond = self.lowerToReg(cond);
                             self.emit(Cmp(cond, Imm(0)));
                             self.emit(Jnz(x86then));
                         }
@@ -221,12 +227,12 @@ impl x86Function {
                     // TODO: Improve the getaddr IR instruction to take multi-dimensional offsets
                     // Then just input those to memFull as scale, index, and disp
                     IRInstr::Getaddr(dst, base, ty, index) => {
-                        let llty = LLType::fromIRType(ty);
-                        let dst = self.lowerToReg(dst, LLType::I64);
-                        let base = self.lowerToReg(base, LLType::I64);
+                        let llty: LLType = ty.into();
+                        let dst = self.lowerToReg(dst);
+                        let base = self.lowerToReg(base);
                         let addr = match index {
-                            IRValue::Reg(_) | IRValue::Ptr(_) => {
-                                let index_val = self.lowerToReg(index, LLType::I64);
+                            IRValue::Reg(..) | IRValue::Ptr(..) => {
+                                let index_val = self.lowerToReg(index);
                                 x86Value::memDirect(
                                     base.getReg()[0],
                                     Some(index_val.getReg()[0]),
@@ -235,7 +241,7 @@ impl x86Function {
                                     llty,
                                 )
                             }
-                            IRValue::Imm(i) => {
+                            IRValue::Imm(i, _) => {
                                 x86Value::memDirect(base.getReg()[0], None, llty.bytes(), *i, llty)
                             }
                             IRValue::Sym(s) => Mem(AddressMode::Relative(*s)),
@@ -244,17 +250,14 @@ impl x86Function {
                     }
                     IRInstr::Ret(..) | IRInstr::Retv => self.lower_return(instr),
                     IRInstr::Trunc(to_ty, dst, from_ty, rs1) => {
-                        let to_llty = LLType::fromIRType(to_ty);
-                        let dst = self.lowerToReg(dst, to_llty);
-                        let rs1 = self.lowerToReg(rs1, to_llty);
+                        let dst = self.lowerToReg(dst);
+                        let rs1 = self.lowerToReg(rs1);
                         self.emit(Mov(dst, rs1));
                     }
                     IRInstr::Zext(to_ty, dst, from_ty, rs1)
                     | IRInstr::Sext(to_ty, dst, from_ty, rs1) => {
-                        let to_llty = LLType::fromIRType(to_ty);
-                        let dst = self.lowerToReg(dst, to_llty);
-                        let from_llty = LLType::fromIRType(from_ty);
-                        let rs1 = self.lowerToReg(rs1, from_llty);
+                        let dst = self.lowerToReg(dst);
+                        let rs1 = self.lowerToReg(rs1);
                         match instr {
                             IRInstr::Zext(..) => self.emit(Movzx(dst, rs1)),
                             IRInstr::Sext(..) => self.emit(Movsx(dst, rs1)),

@@ -6,6 +6,10 @@ pub trait InstructionTrait: Display + Debug + Clone {
     type Val;
 
     fn is_terminator(&self) -> bool;
-    fn defs(&self) -> SmallVec<[&Self::Val; 4]>;
-    fn uses(&self) -> SmallVec<[&Self::Val; 4]>;
+    fn defs(&self) -> Box<dyn Iterator<Item = &Self::Val> + '_>;
+    fn uses(&self) -> Box<dyn Iterator<Item = &Self::Val> + '_>;
+
+    fn values(&self) -> impl Iterator<Item = &Self::Val> {
+        self.defs().into_iter().chain(self.uses().into_iter())
+    }
 }

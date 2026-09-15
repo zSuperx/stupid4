@@ -1,3 +1,4 @@
+use crate::common::InstructionTrait;
 use crate::target::x86::builder::*;
 use crate::target::x86::isa::*;
 use x86Instr::*;
@@ -11,11 +12,7 @@ impl x86Function {
         self.dfs(|self_, curr_id| {
             let curr = self_.blocks.get(&curr_id).unwrap();
             for instr in curr.instructions.iter() {
-                if instr
-                    .regDefs()
-                    .iter()
-                    .any(|r| [SPL, SP, ESP, RSP].contains(r))
-                {
+                if instr.values().any(|v| v.is_frame()) {
                     requires_frame = true;
                 }
             }
@@ -25,15 +22,17 @@ impl x86Function {
 
     /// Emits the frame setup/teardown.
     ///
-    /// This will also retroactively replace all Ret instructions with a Jmp to the epilogue
+    /// This function will replace all leaf block terminators (Ret) with Jmp(epilogue).
+    ///
+    /// Additionally, all allocated frame slots will be rewritten using RBP addressing.
     pub fn emit_frame(&mut self) {
         let body = self.getEntryPoint();
 
         // Create prologue
         let prologue = self.newNamedBlock("prologue");
         self.setEntryPoint(prologue);
-        self.emit_prologue();
         self.setInsertPoint(prologue);
+        self.emit_prologue();
         self.emit(Jmp(body));
         self.addSuccessorsToCurrent(&[body]);
         self.addFallthrough(body);
@@ -54,6 +53,14 @@ impl x86Function {
             leaf.instructions.push(Jmp(epilogue));
             self.addSuccessorsTo(label, &[epilogue]);
         }
+
+        self.dfs_mut(|self_, label| {
+            let block = self_.blocks.get_mut(&label).unwrap();
+
+            for instr in block.instructions.iter_mut() {
+                // TODO: rewrite Frame slots
+            }
+        });
     }
 
     fn emit_prologue(&mut self) {
@@ -62,7 +69,7 @@ impl x86Function {
     }
 
     fn emit_epilogue(&mut self) {
-        self.emit(Mov(Reg(RBP), Reg(RSP)));
+        self.emit(Mov(Reg(RSP), Reg(RBP)));
         self.emit(Pop(Reg(RBP)));
         self.emit(Ret);
     }

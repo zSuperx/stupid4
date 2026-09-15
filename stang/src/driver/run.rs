@@ -10,6 +10,7 @@ use crate::parser::parse_file;
 use crate::sema::CompilerContext;
 use crate::translation_unit::{add_str, global_state, next_symbol, qtype};
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::LazyLock;
 
 pub static CFG: LazyLock<Config> = LazyLock::new(validate_config);
@@ -40,7 +41,7 @@ pub fn run() {
         loop_labels: Vec::new(),
         symbol_table: Default::default(),
         top_level_scope: Default::default(),
-        builder: IRModule::new(),
+        module: IRModule::new(),
     };
 
     let program = parse_file(&CFG.input);
@@ -67,26 +68,31 @@ pub fn run() {
     }
 
     for tir_function in tir_functions.iter() {
-        ctx.builder.add_symbol(tir_function.name.inner.to_string());
+        ctx.module.add_symbol(tir_function.name.inner.to_string());
     }
 
     for tir_function in tir_functions {
         let ir_function = tir_function.codegen(&mut ctx);
-        ctx.builder.add_function(ir_function);
+        ctx.module.add_function(ir_function);
     }
+
+    let mut writer: Box<dyn Write> = match CFG.output.as_str() {
+        "-" => Box::new(std::io::stdout()),
+        file => {
+            Box::new(std::fs::File::create(file).unwrap_or_else(|_| die!("Could not open {file}")))
+        }
+    };
 
     match CFG.action {
         Action::EmitIr => {
-            for function in ctx.builder.functions() {
-                function.print(CFG.verbose);
-                println!()
+            for function in ctx.module.functions() {
+                function.print(&mut writer, CFG.verbose);
             }
         }
         Action::EmitAsm => {
-            for function in ctx.builder.functions() {
+            for function in ctx.module.functions() {
                 let target_function = x86Function::lower(function);
-                target_function.print(CFG.verbose);
-                println!()
+                target_function.print(&mut writer, CFG.verbose);
             }
         }
         Action::CompileOnly => die!("TODO: Compile"),
